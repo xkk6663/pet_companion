@@ -1,0 +1,20 @@
+[Unit]
+Description=music_proxy - xiaozhi music source proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/music_proxy
+EnvironmentFile=/opt/music_proxy/.env
+ExecStart=/usr/bin/python3 /opt/music_proxy/music_proxy.py
+Restart=on-failure
+RestartSec=3
+# 单文件无第三方依赖，这里不需要 venv；用 venv 就把 ExecStart 改成 venv 里的 python
+User=music
+Group=music
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

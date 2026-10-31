@@ -1,0 +1,12 @@
+{
+  "port": 8081,
+  "astrbot_base": "http://127.0.0.1:6185",
+  "astrbot_api_key": "abk_xxx_填入服务器_opt_pet_gateway_config_json的真实值",
+  "session_prefix": "xz-s31-",
+  "tts_enabled": true,
+  "asr_enabled": true,
+  "static_dir": "/opt/pet_gateway/static",
+  "command_table": ["打卡", "拍照", "点歌", "换壁纸", "自拍"],
+  "log_file": "/opt/pet_gateway/gateway.log",
+  "max_pcm_seconds": 10
+}

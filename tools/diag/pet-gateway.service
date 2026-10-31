@@ -1,0 +1,18 @@
+[Unit]
+Description=S9 Pet Gateway (WebSocket 桌宠网关)
+After=network.target docker.service
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pet_gateway
+ExecStart=/opt/pet_gateway/.venv/bin/python -m uvicorn ws_gateway:app --host 0.0.0.0 --port 8081
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# 内存纪律：网关只转发，限制 256MB 防 OOM 拖垮宿主
+MemoryMax=256M
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

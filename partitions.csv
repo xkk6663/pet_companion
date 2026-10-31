@@ -1,0 +1,22 @@
+# Name,   Type, SubType, Offset,   Size,     Flags
+# Note: if you change the phy_init or app partition offset, make sure to change the offset in Kconfig.projbuild
+# ★★ S5 v1.2（2026-09-28）：删 model 分区，storage 扩到 0x720000/0x8E0000（9.29MB）。
+#    根因 = §60 三档异族模型把 littlefs 素材推到 ~8.14MB（models 5.13MB +
+#    fonts 2.74MB + icons/wav/jpg 0.27MB），原 storage 0x5E0000（6.16MB）
+#    装不下 ⇒ 打包 littlefs 镜像时 LFS_ERR_NOSPC（pose 模型写一半爆盘）。
+#      0x20000+0x700000=0x720000 → 0x720000+0x8E0000=0x1000000 ✓（仍排满 16MB）
+#    ★ model（data/spiffs, 3MB）整区空置：本分支无唤醒词（按键触发），构建日志
+#      ESP-SR Models Report: No speech models loaded（v1.1 以来从未烧录）⇒
+#      删除零损失。唤醒词回归时需重做分区评估（当时实证需 912KB 裸分区 mmap）。
+#    ★ 放弃双 OTA：单 app 槽 OTA 实质失效，回退唯一手段 = USB 全量烧录。otadata 保留无害。
+#    ★ storage 偏移/大小均变 ⇒ 必须重烧 storage.bin（idf.py flash 自动带上）；
+#      app 槽偏移/大小未变；旧 0xA20000 处的旧 storage 数据成为无人读的死数据，无害。
+#    ★ 烧录：`idf.py reconfigure` → `idf.py build` → `idf.py flash`（全量，一步到位）。
+#    ★ 历史：§28 双 OTA 6+6MB → S5 v1 单 app 7MB + srmodels 3MB + storage 5.875MB
+#      （已烧录验证）→ S5 v1.1 仅改名 srmodels→model（用户拍板保持已验证布局）→
+#      S5 v1.2 删 model、storage 9.29MB（§60 素材超盘被迫扩容，用户拍板删 model）。
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+otadata,  data, ota,     0x11000,  0x2000,
+ota_0,    app,  ota_0,   0x20000,  0x700000,
+storage,  data, littlefs, 0x720000, 0x8E0000,

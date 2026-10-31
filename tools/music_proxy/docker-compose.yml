@@ -1,0 +1,24 @@
+services:
+  music-proxy:
+    build: .
+    image: music-proxy:1.0.0
+    container_name: music_proxy
+    env_file: .env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    depends_on:
+      - netease-api
+
+  # 可选：自建网易云 NodeJS API（binaryify/netease_cloud_music_api）
+  # 只用第三方解析站、不想要这个服务时：docker compose up -d music-proxy 即可（不会起它）
+  # 起了它就把 .env 的 NETEASE_API 改成 http://netease-api:3000
+  # ★ 绝不要把 3000 端口映射到公网：该 API 无任何鉴权，等于把全网音乐库的直链白送。
+  netease-api:
+    image: binaryify/netease_cloud_music_api:latest
+    container_name: netease_api
+    restart: unless-stopped
+    environment:
+      - NETEASE_API_ENABLE=true
+    expose:
+      - "3000"
