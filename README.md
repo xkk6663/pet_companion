@@ -1,11 +1,29 @@
 # 桌宠伴侣 · pet_companion
 
+<p>
+  <img alt="SoC" src="https://img.shields.io/badge/SoC-ESP32--S31-2563EB?style=flat-square">
+  <img alt="ESP-IDF" src="https://img.shields.io/badge/ESP--IDF-v6.1-06B6D4?style=flat-square">
+  <img alt="FreeRTOS" src="https://img.shields.io/badge/FreeRTOS-SMP-0F172A?style=flat-square">
+  <img alt="LVGL" src="https://img.shields.io/badge/LVGL-9.6-F59E0B?style=flat-square">
+  <img alt="ESP-DL" src="https://img.shields.io/badge/ESP--DL-端侧推理-10B981?style=flat-square">
+  <img alt="License" src="https://img.shields.io/badge/License-Apache--2.0-64748B?style=flat-square">
+</p>
+
 > 一台会说话、会看、会动手的桌面机器人。
-> ESP32-S31 负责"身体"（感知 / 表达 / 执行），云端负责"智力"（听 / 想 / 说），
+> ESP32-S31 负责**身体**（感知 / 表达 / 执行），云端负责**智力**（听 / 想 / 说），
 > 两端用一条 WebSocket 长连接 + 能力自述协议连接（设备始终主动外连，可穿透 NAT）。
+
+<p>
+  <img src="docs/hardware/正面.jpg" width="46%" alt="真机正面：800×480 屏亮屏">
+  <img src="docs/hardware/俯视45度.jpg" width="46%" alt="真机俯视 45 度">
+</p>
 
 **本文是上手与构建入口。** 端云分层、一次完整回合时序、caps 协议、媒体协同、
 详细目录解析与踩坑复盘见 [架构分析](docs/开发文档/架构分析.md)。
+
+**目录** · [能力](#1-能做什么) · [硬件与分区](#2-硬件与分区) · [代码结构](#3-代码结构) ·
+[音频链路](#4-音频链路) · [构建与烧录](#5-构建与烧录) · [关键约束](#6-关键约束违反就炸) ·
+[排障与文档](#7-排障与文档)
 
 ---
 
@@ -32,7 +50,7 @@
 
 | 项 | 规格 |
 |---|---|
-| SoC | ESP32-S31（RISC-V @ 240 MHz） |
+| SoC | ESP32-S31（RISC-V @ 240 MHz，双核） |
 | 内存 | 16 MB Flash + 8 MB PSRAM（OCT @ 200 MHz） |
 | 显示 | 800×480 RGB LCD，双帧缓冲 + LVGL，GT1151 电容触摸 |
 | 摄像头 | OV3660（DVP 8-bit）：1280×720 JPEG / 240×240 RGB565 |
@@ -64,6 +82,7 @@ main/
 │   ├── camera/               相机 / 拍照 / 人脸检测识别 / 取景器 / JPEG / 打卡
 │   ├── face_db/              人脸特征库（SD 持久化 + CRC）
 │   ├── media/                AVI 封装解封装 · 文件管理 · 录像 · 壁纸
+│   ├── mem/                  编译期静态内部内存池（关键短任务栈）
 │   ├── net/                  Wi-Fi / SNTP / 网页管理端（:80）
 │   └── periph/               按键 / LED / SD / 文件系统 / 安全重启
 ├── ui/                       LVGL：splash · 6 个 tab · 浮层 · bin 字体
@@ -74,7 +93,7 @@ components/                   esp_bt_audio（A2DP Source 底座 + gmf io_bt）
                               esp_xiaozhi（MCP 引擎 + 音频管线）
                               esp_littlefs · hand_detect · hand_gesture_recognition
 littlefs_content/             烧进 storage 的模型与素材（不进固件）
-docs/                         工程规范 / 开发文档 / 项目规划 / 硬件图
+docs/                         工程规范 / 开发文档 / 项目规划 / 汇报 / 硬件图
 tools/diag/                   云端网关 ws_gateway.py + 联调脚本
 tools/music_proxy/            点歌音源代理（Docker）
 ```
@@ -110,6 +129,8 @@ SD mp3 → io_file → aud_dec → aud_asrc → aud_alc → aud_enc(SBC) → io_
   改为在常驻 pipeline 上换 uri 重跑。
 - **后台播放**：切 tab、进大页面都不会停歌；返回 MUSIC 页会恢复曲名 / 歌词 / 进度。
   小智语音会话与本地录音起播前会反向抢占（同一时刻只有一个音频出口）。
+- **懒上电**：蓝牙 controller 默认不开机，首次真正要用蓝牙时才上电
+  （省下开机时段的内部 RAM 峰值与 Core0 抢占）。
 
 ---
 
@@ -124,7 +145,7 @@ $env:IDF_PYTHON_ENV_PATH='C:\Espressif\tools\python\v6.1\venv'
 
 idf.py reconfigure
 idf.py build
-idf.py -p COM9 flash        # 全量烧录（含分区表 / storage）
+idf.py -p COM9 flash          # 全量烧录（含分区表 / storage）
 idf.py -p COM9 storage-flash  # 只重烧素材镜像（改 littlefs_content 后）
 ```
 
@@ -148,6 +169,7 @@ idf.py -p COM9 storage-flash  # 只重烧素材镜像（改 littlefs_content 后
 | 做 NVS / littlefs / flash 写的任务栈**必须内部 RAM** | IDF v6.1 擦写前断言 SP 在内部 DRAM，无豁免 |
 | 只读 SD / 纯计算任务可用 PSRAM 栈 | `xTaskCreatePinnedToCoreWithCaps(... MALLOC_CAP_SPIRAM)` |
 | 判内存看 `largest_free_block`，不看 `free_size` | TLSF 不解决碎片 |
+| 固定尺寸、必须内部 RAM 的短任务栈走静态池 | `main/middleware/mem/static_pool.h`：编译期划好，**只增不减**，建一次常驻、用通知交工单（静态 TCB **不能自删后立刻复用**） |
 | WS 收包任务里禁止阻塞 IO | 阻塞一次就是成片丢包 |
 | 只有 LVGL 线程能碰 LVGL | 其它任务只置 `volatile` 标志，由 `lv_timer` 刷新 |
 | 64 位值打印用 `%llu` / `%lld` | `%zu` 只配 `size_t`，用错 varargs 槽错位 |
@@ -171,10 +193,11 @@ idf.py -p COM9 storage-flash  # 只重烧素材镜像（改 littlefs_content 后
 
 文档索引：
 
-- [架构分析](docs/开发文档/架构分析.md) —— 原 README 的完整架构章节
+- [架构分析](docs/开发文档/架构分析.md) —— 端云分层、回合时序、caps 协议、媒体协同
 - [工程规范](docs/工程规范/) —— 分层 / 命名 / 注释 / 代码风格 / 问题复盘
 - [开发文档](docs/开发文档/) —— 蓝牙 A2DP 移植、内存优化、点歌、人脸、AI 浮窗等方案
 - [项目规划](docs/项目规划/) —— 需求文档、todolist、改动记录（§ 编号可追溯）
+- [技术汇报](docs/汇报/桌宠伴侣技术汇报/) —— 16 页幻灯片 + 设计说明（DESIGN.md）
 
 ---
 

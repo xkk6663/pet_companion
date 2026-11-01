@@ -42,9 +42,10 @@
 
 | 文件 | 等级 | 来源 | 真实内容 | 使用页 |
 |---|---|---|---|---|
-| `assets/device_front.jpg` | L1 | 实拍（docs/hardware/正面.jpg，1109×832） | ESP32-S31-Korvo-1 真机正面，800×480 屏亮屏 | P1、P4 |
-| `assets/device_board.jpg` | L2 | 实拍（docs/hardware/主板图.jpg，1569×1057） | 主板俯视，可见模组与接口 | P4（小图佐证） |
-| `assets/device_screen.jpg` | L2 | 实拍（docs/hardware/tex_screen.jpg，800×480） | 屏幕内容特写（开机壁纸 + HUD） | P8（可选） |
+| `assets/device_front.jpg` | L1 | 实拍（docs/hardware/正面.jpg，1109×832） | ESP32-S31-Korvo-1 真机正面，800×480 屏亮屏 | P1 |
+| `docs/hardware/俯视45度.jpg` | L1 | 实拍（1031×773） | 俯视 45° 整机：主板、摄像头、供电口一览 | P4 |
+| `docs/hardware/主板图.jpg` | L2 | 实拍（1569×1057） | 主板俯视，可见模组与接口 | P7（深色底纹，80% 遮罩） |
+| `docs/hardware/tex_screen.jpg` | L2 | 实拍（800×480） | 屏幕内容特写（壁纸 + FPS / CPU HUD） | P16（深色底纹，84% 遮罩） |
 
 其余全部为 **SVG 结构化架构图**（分层栈、时序链、对比矩阵）——技术汇报中架构图就是主视觉，不用 AI 生图替代，避免"编造的架构"。
 
@@ -92,7 +93,7 @@ Hero 3 个（P1 / P6 / P11 + 结尾），占比 25%。
 
 ### P4 产品形态与硬件
 - type: content / role: supporting / rhythm: valley / layout: 左图右文（图 52% / 文 44%，中间 4% 间距）
-- visual: L1 `assets/device_front.jpg`（左侧，560×420）；L2 无
+- visual: L1 `docs/hardware/俯视45度.jpg`（左侧，560×420）
 - visual_role: evidence
 - density: 字数约 200 / 图片 1 张 / 留白约 15%
 - description: 标题「一台会说话、会看、会动手的终端」。左侧真机照。右侧一张 6 行硬件规格表（SoC ESP32-S31 RISC-V 240MHz / 16MB Flash + 8MB PSRAM / 800×480 RGB 触摸屏 / OV3660 摄像头 / ES8389 音频 / microSD）。底部结论条：「4 英寸屏 + 摄像头 + 麦克风，形态决定它必须"在场"—— 感知与执行都在设备上，云端只负责判断。」
@@ -103,7 +104,7 @@ Hero 3 个（P1 / P6 / P11 + 结尾），占比 25%。
 - visual: 左侧色块 + 右侧 6 组模块条目
 - visual_role: evidence
 - density: 字数约 260 / 留白约 12%
-- description: 标题「6 个业务模块，16 个可被云端调用的工具」。左侧色块写「16 / 工具总数」+ 「6 个业务模块」+ 一句「工具表由固件自述，云端动态注册」。右侧按模块分组列：camera 拍照·看图讲解 / punch 人脸打卡 / music 点歌·停播·曲库·下载 / speaker 音量读写 / light 开关·亮度·色彩·状态 / device 重启·Wi-Fi / local 换壁纸。底部一行小字标注来源 `main/middleware/ai/ai_action.c :: TOOLS[]`。
+- description: 标题「6 个业务模块，16 个可被云端调用的工具」。左侧色块写「16 / 工具总数」+ 「6 个业务模块」+ 一句「工具表由固件自述，云端动态注册」。右侧按模块分组列：camera 拍照·看图讲解 / punch 人脸打卡 / music 点歌·停播·曲库·下载 / speaker 音量读写 / light 开关·亮度·色彩·状态 / device 重启·Wi-Fi / local 换壁纸。底部一行小字标注来源 `main/middleware/ai/ai_action.c :: TOOLS[]`；左下深色块内再补一行「另有 8 项纯端侧能力：文件 / 录像 / 录音 / 蓝牙 / 壁纸 / 网页端」。
 - anti_pattern: 禁止用等大卡片网格罗列 16 个工具；禁止把工具名写成营销话术
 
 ### P6 系统全景（★ 核心架构图）
@@ -116,6 +117,7 @@ Hero 3 个（P1 / P6 / P11 + 结尾），占比 25%。
 
 ### P7 章节页 02
 - type: section / role: transition / rhythm: transition / layout: 同 P3（编号 02）
+- visual: 深色底 #0F172A + 主板实拍（`docs/hardware/主板图.jpg`）整页铺底，上盖 80% #0F172A 遮罩
 - description: 「02 边缘端：身体如何落地」+ 「从一条 WebSocket 到一个动作：五级链路，以及哪些智能必须留在本地」。
 
 ### P8 边缘端五级链路
@@ -123,7 +125,7 @@ Hero 3 个（P1 / P6 / P11 + 结尾），占比 25%。
 - visual: SVG 纵向管道 + 右侧卡片
 - visual_role: evidence
 - density: 字数约 280 / 留白约 10%
-- description: 五层自上而下：① 传输 `ws_client.c` 单连接、指数退避、按 JSON 括号切帧；② 解码 `event_bus.c` 9 种帧分发、收包任务不阻塞；③ 执行 `ai_action.c` + 6 模块，动作队列 7168B 栈，回 action_result；④ 会话 `xiaozhi_service.c` 双播放通道（TTS pri=2 抢占 / 音乐 pri=1 让位）；⑤ 表达 `ui/` 桌宠浮窗 + 6 个 tab。右侧标注各层代码行数（ai 8,570 / ui 11,000+）。
+- description: 五层自上而下：① 传输 `ws_client.c` 单连接、指数退避、按 JSON 括号切帧；② 解码 `event_bus.c` 7 种下行帧分发、收包任务不阻塞；③ 执行 `ai_action.c` + 6 模块，动作队列 7168B 栈，回 action_result；④ 会话 `xiaozhi_service.c` 双播放通道（TTS pri=2 抢占 / 音乐 pri=1 让位）；⑤ 表达 `ui/` 桌宠浮窗 + 6 个 tab。右侧标注各层代码行数（ai 8,570 / ui 11,000+）。
 - anti_pattern: 禁止五层等高等宽地平铺；禁止只写模块名不写职责
 
 ### P9 端侧智能：为什么推理留在本地
@@ -136,7 +138,7 @@ Hero 3 个（P1 / P6 / P11 + 结尾），占比 25%。
 
 ### P10 章节页 03
 - type: section / role: transition / rhythm: transition / layout: 同 P3（编号 03）
-- description: 「03 云端大脑与端云协同」+ 「四层能力栈、9 种帧的契约、一次回合的完整时序」。
+- description: 「03 云端大脑与端云协同」+ 「四层能力栈、11 种帧的契约，以及一次回合里两端各做什么」。
 
 ### P11 云端四层能力栈（★）
 - type: content / role: hero / rhythm: peak / layout: 分层堆叠（L1-L4 自下而上，每层左标号 + 名称 + 组件，右侧一列"失败时的降级"）
@@ -146,13 +148,13 @@ Hero 3 个（P1 / P6 / P11 + 结尾），占比 25%。
 - description: L1 接入 pet-gateway（/ws · /action · /caps · /media · /upload · /push · /health）；L2 编排 AstrBot v4.29.1 + 19 插件；L3 智力 deepseek-flash / SenseVoiceSmall / qwen-audio-3.1-tts-flash / 多模态 VL / embedding；L4 内容 music_proxy（自建网易云 + 2 兜底源）+ alist。右侧降级列：TTS 挂 → 只掉语音；AstrBot 重启 → 重试一次；回复超长 → TTS 截 200 字、文字全文。
 - anti_pattern: 禁止画成"一个模型包打天下"；禁止把 L3 写成自研模型
 
-### P12 端云契约：9 种帧
+### P12 端云契约：11 种帧
 - type: content / role: supporting / rhythm: valley / layout: 上标题 + 左侧说明窄栏（26%）+ 右侧帧表（70%）
 - visual: Table
 - visual_role: evidence
 - density: 字数约 240 / 表格 1 张 / 留白约 12%
-- description: 标题「9 种帧，就是全部协议」。表格四列：帧 / 方向 / 作用 / 设备落点。9 行：caps↑、pcm↑、text↑、event.action_result↑、image_req↑、text↓、emotion↓、audio↓、image↓、action↓。左栏点出三条设计纪律：单行 JSON、大对象走 URL 不传二进制、相对 URL 由设备补 base。
-- anti_pattern: 禁止裸表格无容器；禁止把 9 种帧拆成多页
+- description: 标题「11 种帧，就是两端之间的全部协议」。表格四列：帧 / 方向 / 作用 / 设备落点。11 行：caps↑、pcm↑、text↑↓、event.action_result↑、image_req↑、action↓、system↓、emotion↓、audio↓、image↓、error↓。左栏点出三条设计纪律：单行 JSON、大对象走 URL 不传二进制、相对 URL 由设备补 base。
+- anti_pattern: 禁止裸表格无容器；禁止把 11 种帧拆成多页
 
 ### P13 一次点歌的完整时序
 - type: content / role: supporting / rhythm: valley / layout: 横向流程链（6 步，箭头连接）+ 底部两条关键设计
@@ -175,12 +177,12 @@ Hero 3 个（P1 / P6 / P11 + 结尾），占比 25%。
 - visual: 巨型数字 SVG + 三个 KPI
 - visual_role: anchor
 - density: 字数约 180 / 留白约 20%
-- description: 主数字「4 KB」= 内部 RAM 剩余（WiFi DMA 独占 51KB 挪不走）。右侧三个：8 MB PSRAM / 7,168 B 动作任务栈 / 60,724 行设备端代码。三条洞察：判内存只看 largest 不看 free；碰 flash 的任务栈必须内部 RAM；云端把图片归一化，省下设备端一条解码分支。结论：边缘设备的边界是内存与带宽，不是 CPU。
+- description: 主数字「7 KB」= 内部 RAM 最大连续块（打卡会话实测 `free=7259 largest=7168`，WiFi DMA 独占 51KB 挪不走）。右侧三个：8 MB PSRAM / 7,168 B 动作任务栈 / 61,953 行设备端 C 代码（137 文件）。三条洞察：判内存只看 largest 不看 free（关键短任务栈改走编译期 12 KB 静态池）；碰 flash 的任务栈必须内部 RAM；云端把图片归一化，省下设备端一条解码分支。结论：边缘设备的边界是内存与带宽，不是 CPU。
 - anti_pattern: 禁止把四个数字做成等大卡片；禁止只给数字不给判断
 
 ### P16 结尾
 - type: ending / role: hero / rhythm: peak / layout: 收束金句 + 落款
-- visual: 深色底 + 一句大字
+- visual: 深色底 #0F172A + 屏幕实拍（`docs/hardware/tex_screen.jpg`）整页铺底，上盖 84% 遮罩 + 一句大字
 - visual_role: atmosphere
 - density: 字数约 50 / 留白约 55%
 - description: 金句「身体负责在场，大脑负责判断 —— 中间只隔一条连接。」下方落款「S9 桌宠伴侣 · pet_companion · ESP32-S31 + AstrBot」。无页脚。
