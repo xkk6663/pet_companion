@@ -1,0 +1,91 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#FFFFFF', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column' }}>
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#0F172A' }}>一次点歌：两端各做了什么</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8', letterSpacing: 1 }}>03 / 协同时序</Text>
+    </Box>
+    <Box style={{ width: '100%', height: 1, background: '#E2E8F0', marginTop: 14 }} />
+
+    <Text style={{ fontSize: 16, color: '#475569', marginTop: 20 }}>
+        用户说「放首晴天」之后，这条请求在设备、网关、云端之间走了六步
+    </Text>
+
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'stretch', marginTop: 22, height: 238 }}>
+
+        <Box style={{ width: 172, padding: '18px 14px', background: '#FFFBEB', borderTop: '3px solid #F59E0B', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#B45309' }}>设备 01</Text>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A', marginTop: 10, lineHeight: 1.35 }}>按键说完一句</Text>
+            <Text style={{ fontSize: 14, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                PTT 录音，16k 单声道 PCM 逐帧 base64 上行
+            </Text>
+        </Box>
+        <Text style={{ width: 24, fontSize: 18, color: '#CBD5E1', textAlign: 'center', lineHeight: 1.6 }}>→</Text>
+
+        <Box style={{ width: 172, padding: '18px 14px', background: '#EFF6FF', borderTop: '3px solid #2563EB', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#1D4ED8' }}>网关 02</Text>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A', marginTop: 10, lineHeight: 1.35 }}>先回「思考中」</Text>
+            <Text style={{ fontSize: 14, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                ASR + LLM 实测要 9–18 s，静默会被当成没反应
+            </Text>
+        </Box>
+        <Text style={{ width: 24, fontSize: 18, color: '#CBD5E1', textAlign: 'center', lineHeight: 1.6 }}>→</Text>
+
+        <Box style={{ width: 172, padding: '18px 14px', background: '#EFF6FF', borderTop: '3px solid #2563EB', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#1D4ED8' }}>网关 03</Text>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A', marginTop: 10, lineHeight: 1.35 }}>转写 + 回显</Text>
+            <Text style={{ fontSize: 14, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                SenseVoice 转文字，并把识别结果回显到屏幕
+            </Text>
+        </Box>
+        <Text style={{ width: 24, fontSize: 18, color: '#CBD5E1', textAlign: 'center', lineHeight: 1.6 }}>→</Text>
+
+        <Box style={{ width: 172, padding: '18px 14px', background: '#ECFEFF', borderTop: '3px solid #06B6D4', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#0E7490' }}>云端 04</Text>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A', marginTop: 10, lineHeight: 1.35 }}>模型决定调工具</Text>
+            <Text style={{ fontSize: 14, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                DeepSeek 选中点歌工具，插件 POST 网关 /action
+            </Text>
+        </Box>
+        <Text style={{ width: 24, fontSize: 18, color: '#CBD5E1', textAlign: 'center', lineHeight: 1.6 }}>→</Text>
+
+        <Box style={{ width: 172, padding: '18px 14px', background: '#FFFBEB', borderTop: '3px solid #F59E0B', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#B45309' }}>设备 05</Text>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A', marginTop: 10, lineHeight: 1.35 }}>先本地，再云音源</Text>
+            <Text style={{ fontSize: 14, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                SD 曲库命中直接播；没有才去音源代理搜索起播
+            </Text>
+        </Box>
+        <Text style={{ width: 24, fontSize: 18, color: '#CBD5E1', textAlign: 'center', lineHeight: 1.6 }}>→</Text>
+
+        <Box style={{ width: 172, padding: '18px 14px', background: '#FFFBEB', borderTop: '3px solid #F59E0B', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#B45309' }}>设备 06</Text>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A', marginTop: 10, lineHeight: 1.35 }}>回执，再说一句</Text>
+            <Text style={{ fontSize: 14, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                回 action_result 真实结论；网关只回文字不出 TTS
+            </Text>
+        </Box>
+    </Box>
+
+    <Box style={{ display: 'flex', flexDirection: 'row', gap: 24, marginTop: 26 }}>
+        <Box style={{ flex: 1, padding: '18px 20px', border: '1px solid #E2E8F0', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#0F172A' }}>第二秒就要有反馈</Text>
+            <Text style={{ fontSize: 15, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                识别与推理加起来十几秒，所以网关收到音频立刻回一个「思考中」表情 ——
+                用户看到的不是卡住，是在想。
+            </Text>
+        </Box>
+        <Box style={{ flex: 1, padding: '18px 20px', border: '1px solid #E2E8F0', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#0F172A' }}>拿到回执才开口</Text>
+            <Text style={{ fontSize: 15, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                回复文案里的「放好了」来自设备回执，不是模型猜的。
+                点歌成功后只发文字不发语音，否则 TTS 会把刚起播的音乐顶掉。
+            </Text>
+        </Box>
+        <Box style={{ flex: 1, padding: '18px 20px', border: '1px solid #E2E8F0', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#0F172A' }}>动作有明确上限</Text>
+            <Text style={{ fontSize: 15, color: '#475569', marginTop: 10, lineHeight: 1.55 }}>
+                每个动作带自己的超时：打卡 45 s、拍照 20 s、点歌 12 s、调音量 4 s ——
+                超时即回「设备没回话」，不让用户干等。
+            </Text>
+        </Box>
+    </Box>
+</Slide>

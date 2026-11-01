@@ -1,0 +1,87 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#FFFFFF', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column' }}>
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#0F172A' }}>真正的边界是内存，不是算力</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8', letterSpacing: 1 }}>02–03 / 工程约束</Text>
+    </Box>
+    <Box style={{ width: '100%', height: 1, background: '#E2E8F0', marginTop: 14 }} />
+
+    <Box style={{ display: 'flex', flexDirection: 'row', gap: 32, marginTop: 26 }}>
+
+        <Box style={{ width: 448, display: 'flex', flexDirection: 'column', padding: '26px 28px', background: '#0F172A', borderRadius: 8 }}>
+            <Text style={{ fontSize: 14, color: '#94A3B8' }}>内部 RAM 剩余（启动后实测）</Text>
+            <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', marginTop: 12 }}>
+                <Text style={{ fontSize: 84, fontWeight: 'bold', color: '#FFFFFF', lineHeight: 1 }}>4</Text>
+                <Text style={{ fontSize: 30, fontWeight: 'bold', color: '#F59E0B', marginLeft: 8, marginBottom: 8 }}>KB</Text>
+            </Box>
+            <Text style={{ fontSize: 15, color: '#CBD5E1', marginTop: 18, lineHeight: 1.6 }}>
+                Wi-Fi 的 DMA 缓冲独占 51 KB，搬不走；任务栈与 RTOS 对象也只能从内部 RAM 拿
+            </Text>
+            <Box style={{ flex: 1 }} />
+            <Text style={{ fontSize: 14, color: '#64748B', lineHeight: 1.5 }}>
+                判够不够只看最大连续块（largest），
+                <br />
+                不看总空闲（free）—— 碎片会让「够」变成「分配不到」
+            </Text>
+        </Box>
+
+        <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '18px 22px', border: '1px solid #E2E8F0', borderRadius: 8 }}>
+                <Box style={{ width: 132, display: 'flex', flexDirection: 'row', alignItems: 'flex-end' }}>
+                    <Text style={{ fontSize: 40, fontWeight: 'bold', color: '#2563EB', lineHeight: 1 }}>8</Text>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#2563EB', marginLeft: 5, marginBottom: 4 }}>MB</Text>
+                </Box>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A' }}>PSRAM 总量</Text>
+                    <Text style={{ fontSize: 14, color: '#64748B', marginTop: 5 }}>宽裕，但带宽被屏幕刷新、相机与推理共享</Text>
+                </Box>
+            </Box>
+            <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '18px 22px', border: '1px solid #E2E8F0', borderRadius: 8 }}>
+                <Box style={{ width: 132, display: 'flex', flexDirection: 'row', alignItems: 'flex-end' }}>
+                    <Text style={{ fontSize: 40, fontWeight: 'bold', color: '#2563EB', lineHeight: 1 }}>7,168</Text>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#2563EB', marginLeft: 5, marginBottom: 4 }}>B</Text>
+                </Box>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A' }}>动作任务栈</Text>
+                    <Text style={{ fontSize: 14, color: '#64748B', marginTop: 5 }}>每次动作后打水位，实测执行完仍余 2,320 B</Text>
+                </Box>
+            </Box>
+            <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', padding: '18px 22px', border: '1px solid #E2E8F0', borderRadius: 8 }}>
+                <Box style={{ width: 132, display: 'flex', flexDirection: 'row', alignItems: 'flex-end' }}>
+                    <Text style={{ fontSize: 40, fontWeight: 'bold', color: '#2563EB', lineHeight: 1 }}>60,724</Text>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#2563EB', marginLeft: 5, marginBottom: 4 }}>行</Text>
+                </Box>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A' }}>设备端 C 代码</Text>
+                    <Text style={{ fontSize: 14, color: '#64748B', marginTop: 5 }}>135 个文件，不含 vendor 组件与生成字模</Text>
+                </Box>
+            </Box>
+        </Box>
+    </Box>
+
+    <Box style={{ display: 'flex', flexDirection: 'row', gap: 24, marginTop: 26 }}>
+        <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', borderTop: '2px solid #2563EB', paddingTop: 14 }}>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A' }}>碎片比总量更致命</Text>
+            <Text style={{ fontSize: 15, color: '#475569', marginTop: 8, lineHeight: 1.55 }}>
+                分配器不合并碎片，一次大块申请失败，后面再释放也很难补回来
+            </Text>
+        </Box>
+        <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', borderTop: '2px solid #2563EB', paddingTop: 14 }}>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A' }}>写 flash 的栈必须在片内</Text>
+            <Text style={{ fontSize: 15, color: '#475569', marginTop: 8, lineHeight: 1.55 }}>
+                擦写前硬件会断言当前任务栈指针在内部 DRAM，没有 API 可以豁免
+            </Text>
+        </Box>
+        <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', borderTop: '2px solid #2563EB', paddingTop: 14 }}>
+            <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#0F172A' }}>能挪到云端的都挪走</Text>
+            <Text style={{ fontSize: 15, color: '#475569', marginTop: 8, lineHeight: 1.55 }}>
+                图片归一化放在网关做，设备端就少一条解码分支和一堆失败日志
+            </Text>
+        </Box>
+    </Box>
+
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: 22, padding: '14px 20px', background: '#F8FAFC', borderRadius: 8, borderLeft: '3px solid #F59E0B' }}>
+        <Text style={{ fontSize: 16, color: '#1E293B', lineHeight: 1.45 }}>
+            所以分工不是「谁更强」，而是「谁更合适」：<span style={{ fontWeight: 'bold' }}>设备负责在场与实时</span>，<span style={{ fontWeight: 'bold' }}>云端负责理解与记忆</span>。
+        </Text>
+    </Box>
+</Slide>

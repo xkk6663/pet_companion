@@ -1,0 +1,14 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#0F172A', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+    <Box style={{ display: 'flex', flexDirection: 'column', marginLeft: 40 }}>
+        <Text style={{ fontSize: 46, fontWeight: 'bold', color: '#FFFFFF', lineHeight: 1.5 }}>
+            身体负责在场，大脑负责判断。
+        </Text>
+        <Text style={{ fontSize: 46, fontWeight: 'bold', color: '#60A5FA', lineHeight: 1.5 }}>
+            中间只隔一条连接。
+        </Text>
+        <Box style={{ width: 64, height: 3, background: '#2563EB', marginTop: 34, borderRadius: 2 }} />
+        <Text style={{ fontSize: 16, color: '#64748B', marginTop: 26 }}>
+            S9 桌宠伴侣 · pet_companion · ESP32-S31 + AstrBot
+        </Text>
+    </Box>
+</Slide>

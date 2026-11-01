@@ -1,0 +1,81 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#FFFFFF', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column' }}>
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#0F172A' }}>云端不是「一个模型」，是四层能力栈</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8', letterSpacing: 1 }}>03 / 云端分层</Text>
+    </Box>
+    <Box style={{ width: '100%', height: 1, background: '#E2E8F0', marginTop: 14 }} />
+
+    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 18 }}>
+        <Text style={{ fontSize: 15, color: '#475569' }}>请求自上而下穿过四层，每层都有独立的降级策略</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8' }}>实测在线：/health → version 0.8.1</Text>
+    </Box>
+
+    <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 12, border: '1px solid #E2E8F0', borderRadius: 8 }}>
+
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 100, padding: '0 22px', background: '#F8FAFC', borderBottom: '1px solid #E2E8F0', borderTopLeftRadius: 8, borderTopRightRadius: 8 }}>
+            <Box style={{ width: 6, height: 44, background: '#2563EB', borderRadius: 3, marginRight: 20 }} />
+            <Box style={{ width: 210, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 19, fontWeight: 'bold', color: '#0F172A' }}>L1 · 接入层</Text>
+                <Text style={{ fontSize: 14, color: '#64748B', marginTop: 4 }}>pet-gateway :8081</Text>
+            </Box>
+            <Text style={{ fontSize: 14, color: '#1E293B', flex: 1, lineHeight: 1.6 }}>
+                WS 长连接 · 动作中继 · 能力查询 · 媒体出口 · 图片归一化 · 主动推送 · 健康检查
+            </Text>
+            <Box style={{ width: 286, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 13, color: '#94A3B8' }}>网关挂掉</Text>
+                <Text style={{ fontSize: 14, color: '#475569', marginTop: 4 }}>设备指数退避重连，会话不做状态恢复</Text>
+            </Box>
+        </Box>
+
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 100, padding: '0 22px', borderBottom: '1px solid #E2E8F0' }}>
+            <Box style={{ width: 6, height: 44, background: '#1D4ED8', borderRadius: 3, marginRight: 20 }} />
+            <Box style={{ width: 210, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 19, fontWeight: 'bold', color: '#0F172A' }}>L2 · 编排层</Text>
+                <Text style={{ fontSize: 14, color: '#64748B', marginTop: 4 }}>AstrBot v4.29.1</Text>
+            </Box>
+            <Text style={{ fontSize: 14, color: '#1E293B', flex: 1, lineHeight: 1.6 }}>
+                人格与对话编排 · 插件体系：设备工具注册 / 长期记忆 / 生图 / 音乐 / 主动关怀 / 语义检索
+            </Text>
+            <Box style={{ width: 286, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 13, color: '#94A3B8' }}>AstrBot 重启（约 20 s）</Text>
+                <Text style={{ fontSize: 14, color: '#475569', marginTop: 4 }}>网关对同一轮对话重试一次</Text>
+            </Box>
+        </Box>
+
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 100, padding: '0 22px', borderBottom: '1px solid #E2E8F0' }}>
+            <Box style={{ width: 6, height: 44, background: '#0891B2', borderRadius: 3, marginRight: 20 }} />
+            <Box style={{ width: 210, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 19, fontWeight: 'bold', color: '#0F172A' }}>L3 · 智力层</Text>
+                <Text style={{ fontSize: 14, color: '#64748B', marginTop: 4 }}>外部 API（云端只做路由）</Text>
+            </Box>
+            <Text style={{ fontSize: 14, color: '#1E293B', flex: 1, lineHeight: 1.6 }}>
+                DeepSeek-flash 决策 · SenseVoice 转写 · qwen-audio-TTS 合成 · 多模态 VL 看图 · embedding 检索
+            </Text>
+            <Box style={{ width: 286, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 13, color: '#94A3B8' }}>TTS 失败 / 回复超长</Text>
+                <Text style={{ fontSize: 14, color: '#475569', marginTop: 4 }}>只掉语音不掉文字；TTS 截 200 字，气泡仍是全文</Text>
+            </Box>
+        </Box>
+
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 100, padding: '0 22px', borderBottomLeftRadius: 8, borderBottomRightRadius: 8 }}>
+            <Box style={{ width: 6, height: 44, background: '#475569', borderRadius: 3, marginRight: 20 }} />
+            <Box style={{ width: 210, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 19, fontWeight: 'bold', color: '#0F172A' }}>L4 · 内容层</Text>
+                <Text style={{ fontSize: 14, color: '#64748B', marginTop: 4 }}>music_proxy · alist</Text>
+            </Box>
+            <Text style={{ fontSize: 14, color: '#1E293B', flex: 1, lineHeight: 1.6 }}>
+                音源代理：自建网易云 API 为主，两个第三方源兜底；媒体文件与网盘检索
+            </Text>
+            <Box style={{ width: 286, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 13, color: '#94A3B8' }}>音源全部不可用</Text>
+                <Text style={{ fontSize: 14, color: '#475569', marginTop: 4 }}>回落设备本地曲库，SD 卡里的歌照常播</Text>
+            </Box>
+        </Box>
+    </Box>
+
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: 16, padding: '14px 20px', background: '#F8FAFC', borderRadius: 8, borderLeft: '3px solid #F59E0B' }}>
+        <Text style={{ fontSize: 16, color: '#1E293B', lineHeight: 1.45 }}>
+            四层各自可降级，任何一层失能都不会让设备「变砖」—— 最差情况下它仍是一台能拍照、能录像、能放本地音乐的设备。
+        </Text>
+    </Box>
+</Slide>

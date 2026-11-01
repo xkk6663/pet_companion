@@ -1,0 +1,65 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#FFFFFF', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column' }}>
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#0F172A' }}>一句话进来，先走确定性，再走模型</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8', letterSpacing: 1 }}>03 / 调度策略</Text>
+    </Box>
+    <Box style={{ width: '100%', height: 1, background: '#E2E8F0', marginTop: 14 }} />
+
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: 20, gap: 16 }}>
+        <Box style={{ width: 168, padding: '16px 18px', background: '#F1F5F9', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0F172A' }}>设备文本</Text>
+            <Text style={{ fontSize: 14, color: '#64748B', marginTop: 6 }}>语音转写 / 屏幕输入</Text>
+        </Box>
+        <Text style={{ fontSize: 18, color: '#CBD5E1' }}>→</Text>
+        <Box style={{ width: 200, padding: '16px 18px', background: '#2563EB', borderRadius: 8, display: 'flex', flexDirection: 'column' }}>
+            <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#FFFFFF' }}>确定性匹配</Text>
+            <Text style={{ fontSize: 14, color: '#BFDBFE', marginTop: 6, fontFamily: 'Consolas' }}>match_intent()</Text>
+        </Box>
+        <Text style={{ fontSize: 18, color: '#CBD5E1' }}>→</Text>
+        <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <Box style={{ padding: '12px 16px', background: '#FFFBEB', borderRadius: 6, borderLeft: '3px solid #F59E0B', display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#B45309', width: 52 }}>命中</Text>
+                <Text style={{ fontSize: 15, color: '#1E293B', flex: 1 }}>直接下发动作：不进模型、不花 token、一次往返</Text>
+            </Box>
+            <Box style={{ padding: '12px 16px', background: '#ECFEFF', borderRadius: 6, borderLeft: '3px solid #06B6D4', display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#0E7490', width: 52 }}>不命中</Text>
+                <Text style={{ fontSize: 15, color: '#1E293B', flex: 1 }}>交给大模型：理解语义，可能自己决定调用工具</Text>
+            </Box>
+        </Box>
+    </Box>
+
+    <Box style={{ marginTop: 24, border: '1px solid #E2E8F0', borderRadius: 8, padding: '0 22px' }}>
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 44, borderBottom: '1px solid #E2E8F0' }}>
+            <Text style={{ fontSize: 15, color: '#94A3B8', width: 150 }}>维度</Text>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#B45309', flex: 1 }}>关键词快速路</Text>
+            <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#0E7490', flex: 1 }}>大模型工具调用</Text>
+        </Box>
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 56, borderBottom: '1px solid #F8FAFC' }}>
+            <Text style={{ fontSize: 16, color: '#1E293B', width: 150 }}>覆盖范围</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>只认确定性短语，宁可漏给模型</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>任意自然语言，包括没预设过的说法</Text>
+        </Box>
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 56, borderBottom: '1px solid #F8FAFC' }}>
+            <Text style={{ fontSize: 16, color: '#1E293B', width: 150 }}>成本</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>0 token</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>每轮随请求带上工具说明书</Text>
+        </Box>
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 56, borderBottom: '1px solid #F8FAFC' }}>
+            <Text style={{ fontSize: 16, color: '#1E293B', width: 150 }}>延迟</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>一次动作往返（不含模型推理）</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>叠加一轮完整推理时间</Text>
+        </Box>
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 56 }}>
+            <Text style={{ fontSize: 16, color: '#1E293B', width: 150 }}>风险</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>只会漏触发，不会误触发</Text>
+            <Text style={{ fontSize: 15, color: '#475569', flex: 1 }}>工具失败时可能编一句「已经办好了」</Text>
+        </Box>
+    </Box>
+
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', marginTop: 22, padding: '16px 22px', background: '#EFF6FF', borderRadius: 8, borderLeft: '3px solid #2563EB' }}>
+        <Text style={{ fontSize: 16, color: '#1E293B', lineHeight: 1.5 }}>
+            所以<span style={{ fontWeight: 'bold' }}>打卡、拍照</span>这类有副作用的动作只走确定性通道 ——
+            模型编一句「打卡成功」，用户以为打了卡，实际考勤里什么都没有。
+        </Text>
+    </Box>
+</Slide>

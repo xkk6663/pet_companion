@@ -1,0 +1,91 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#FFFFFF', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column' }}>
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#0F172A' }}>人脸识别不上云：三个理由与一个代价</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8', letterSpacing: 1 }}>02 / 端侧智能</Text>
+    </Box>
+    <Box style={{ width: '100%', height: 1, background: '#E2E8F0', marginTop: 14 }} />
+
+    <Box style={{ display: 'flex', flexDirection: 'row', marginTop: 22, height: 430 }}>
+
+        <Box style={{ width: 522, display: 'flex', flexDirection: 'column' }}>
+            <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <Box style={{ width: 8, height: 8, borderRadius: 4, background: '#CBD5E1' }} />
+                <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#94A3B8' }}>传脸到云端识别</Text>
+                <Text style={{ fontSize: 13, color: '#CBD5E1', marginLeft: 4 }}>未采用</Text>
+            </Box>
+            <Box style={{ width: '100%', height: 1, background: '#F1F5F9', marginTop: 16 }} />
+
+            <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 6 }}>
+                <Box style={{ paddingTop: 16, paddingBottom: 16, borderBottom: '1px solid #F1F5F9' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#64748B' }}>时延</Text>
+                    <Text style={{ fontSize: 15, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>一张 40 KB 照片上传 + 云端推理 + 回传，一次往返秒级</Text>
+                </Box>
+                <Box style={{ paddingTop: 16, paddingBottom: 16, borderBottom: '1px solid #F1F5F9' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#64748B' }}>隐私</Text>
+                    <Text style={{ fontSize: 15, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>生物特征一旦离开设备，无法撤回也无法证明未被留存</Text>
+                </Box>
+                <Box style={{ paddingTop: 16, paddingBottom: 16, borderBottom: '1px solid #F1F5F9' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#64748B' }}>可用性</Text>
+                    <Text style={{ fontSize: 15, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>断网或弱网时打卡直接失效，而考勤恰恰要求稳定</Text>
+                </Box>
+                <Box style={{ paddingTop: 16, paddingBottom: 16 }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#64748B' }}>成本</Text>
+                    <Text style={{ fontSize: 15, color: '#94A3B8', marginTop: 6, lineHeight: 1.5 }}>每次打卡都烧一次云端视觉推理，且随人数线性增长</Text>
+                </Box>
+            </Box>
+        </Box>
+
+        <Box style={{ width: 1, background: '#E2E8F0', marginLeft: 28, marginRight: 28 }} />
+
+        <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <Box style={{ width: 8, height: 8, borderRadius: 4, background: '#2563EB' }} />
+                <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#0F172A' }}>在设备本地比对</Text>
+                <Text style={{ fontSize: 13, color: '#2563EB', marginLeft: 4 }}>已落地</Text>
+            </Box>
+            <Box style={{ width: '100%', height: 1, background: '#DBEAFE', marginTop: 16 }} />
+
+            <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 6 }}>
+                <Box style={{ paddingTop: 16, paddingBottom: 16, borderBottom: '1px solid #F1F5F9' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#1E293B' }}>模型</Text>
+                    <Text style={{ fontSize: 15, color: '#475569', marginTop: 6, lineHeight: 1.5 }}>
+                        MFN 1.30 MB + MSR 60 KB + MNP 127 KB，识别时按需加载
+                    </Text>
+                </Box>
+                <Box style={{ paddingTop: 16, paddingBottom: 16, borderBottom: '1px solid #F1F5F9' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#1E293B' }}>时延</Text>
+                    <Text style={{ fontSize: 15, color: '#475569', marginTop: 6, lineHeight: 1.5 }}>
+                        单次特征提取 <span style={{ fontWeight: 'bold', color: '#F59E0B' }}>324 ms</span>（实机实测），不依赖网络
+                    </Text>
+                </Box>
+                <Box style={{ paddingTop: 16, paddingBottom: 16, borderBottom: '1px solid #F1F5F9' }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#1E293B' }}>存储</Text>
+                    <Text style={{ fontSize: 15, color: '#475569', marginTop: 6, lineHeight: 1.5 }}>
+                        特征库在 SD 卡（face_db），双世代号 + CRC 校验，掉电不丢
+                    </Text>
+                </Box>
+                <Box style={{ paddingTop: 16, paddingBottom: 16 }}>
+                    <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#1E293B' }}>可用性</Text>
+                    <Text style={{ fontSize: 15, color: '#475569', marginTop: 6, lineHeight: 1.5 }}>
+                        断网也能打卡；人脸数据不出设备，云端只收到一句结论
+                    </Text>
+                </Box>
+            </Box>
+        </Box>
+    </Box>
+
+    <Box style={{
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: '14px 22px',
+        background: '#EFF6FF',
+        borderRadius: 8,
+        borderLeft: '3px solid #2563EB',
+    }}>
+        <Text style={{ fontSize: 16, color: '#1E293B', lineHeight: 1.5 }}>
+            代价是 1.5 MB 模型与一块 PSRAM 预算 —— 这笔交易在<span style={{ fontWeight: 'bold' }}>人脸场景</span>成立（隐私 + 离线），
+            在<span style={{ fontWeight: 'bold' }}>对话场景</span>不成立（模型太大、更新太慢），所以对话仍然全走云端。
+        </Text>
+    </Box>
+</Slide>

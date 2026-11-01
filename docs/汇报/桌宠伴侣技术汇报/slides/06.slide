@@ -1,0 +1,144 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#FFFFFF', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column' }}>
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#0F172A' }}>一条连接，串起两层智能</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8', letterSpacing: 1 }}>01 / 系统全景</Text>
+    </Box>
+    <Box style={{ width: '100%', height: 1, background: '#E2E8F0', marginTop: 14 }} />
+
+    <Box style={{ display: 'flex', flexDirection: 'column', marginTop: 20 }}>
+
+        <Box style={{
+            height: 148,
+            background: '#0F172A',
+            borderRadius: 8,
+            padding: '18px 20px',
+            display: 'flex',
+            flexDirection: 'row',
+            gap: 18,
+        }}>
+            <Box style={{ width: 116, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#FFFFFF' }}>云端大脑</Text>
+                <Text style={{ fontSize: 13, color: '#64748B', marginTop: 8, lineHeight: 1.5 }}>
+                    阿里云 2C / 1.7G
+                </Text>
+            </Box>
+            <Box style={{ width: 1, background: '#334155' }} />
+            <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#06B6D4' }}>编排</Text>
+                <Text style={{ fontSize: 15, color: '#E2E8F0', marginTop: 8, lineHeight: 1.5 }}>
+                    AstrBot v4.29.1 · 插件化编排
+                </Text>
+                <Text style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>记忆 / 生图 / 主动关怀 / 语义检索</Text>
+            </Box>
+            <Box style={{ width: 1, background: '#334155' }} />
+            <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#06B6D4' }}>智力</Text>
+                <Text style={{ fontSize: 15, color: '#E2E8F0', marginTop: 8, lineHeight: 1.5 }}>
+                    DeepSeek-flash · SenseVoice
+                </Text>
+                <Text style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>qwen-audio-TTS · 多模态 VL · embedding</Text>
+            </Box>
+            <Box style={{ width: 1, background: '#334155' }} />
+            <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#06B6D4' }}>内容</Text>
+                <Text style={{ fontSize: 15, color: '#E2E8F0', marginTop: 8, lineHeight: 1.5 }}>
+                    music_proxy 音源代理
+                </Text>
+                <Text style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>自建网易云 API + 2 个兜底源 · alist</Text>
+            </Box>
+        </Box>
+
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 42 }}>
+            <Text style={{ fontSize: 13, color: '#64748B' }}>↑ 上行 pcm · text · caps · action_result</Text>
+            <Box style={{ flex: 1, height: 1, borderTop: '1px dashed #CBD5E1', marginLeft: 16, marginRight: 16 }} />
+            <Text style={{ fontSize: 13, color: '#64748B' }}>下行 text · emotion · audio · image · action ↓</Text>
+        </Box>
+
+        <Box style={{
+            height: 76,
+            background: '#2563EB',
+            borderRadius: 8,
+            padding: '0 22px',
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 20,
+        }}>
+            <Box style={{ display: 'flex', flexDirection: 'column', width: 200 }}>
+                <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#FFFFFF' }}>接入网关</Text>
+                <Text style={{ fontSize: 13, color: '#BFDBFE', marginTop: 4 }}>pet-gateway :8081 · systemd</Text>
+            </Box>
+            <Box style={{ flex: 1, display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                <Text style={{ fontSize: 14, color: '#FFFFFF', fontFamily: 'Consolas' }}>/ws/{'{sid}'}</Text>
+                <Text style={{ fontSize: 14, color: '#BFDBFE', fontFamily: 'Consolas' }}>/action</Text>
+                <Text style={{ fontSize: 14, color: '#BFDBFE', fontFamily: 'Consolas' }}>/caps</Text>
+                <Text style={{ fontSize: 14, color: '#BFDBFE', fontFamily: 'Consolas' }}>/media</Text>
+                <Text style={{ fontSize: 14, color: '#BFDBFE', fontFamily: 'Consolas' }}>/upload</Text>
+                <Text style={{ fontSize: 14, color: '#BFDBFE', fontFamily: 'Consolas' }}>/push</Text>
+                <Text style={{ fontSize: 14, color: '#BFDBFE', fontFamily: 'Consolas' }}>/health</Text>
+            </Box>
+        </Box>
+
+        <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', height: 42 }}>
+            <Text style={{ fontSize: 13, color: '#2563EB', fontWeight: 'bold' }}>单条 WebSocket 长连接 · 1s → 30s 指数退避 · 设备侧永远主动外连</Text>
+            <Box style={{ flex: 1, height: 1, borderTop: '1px dashed #93C5FD', marginLeft: 16 }} />
+        </Box>
+
+        <Box style={{
+            height: 146,
+            background: '#EFF6FF',
+            border: '1px solid #BFDBFE',
+            borderRadius: 8,
+            padding: '14px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+        }}>
+            <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 18 }}>
+                <Box style={{ width: 116, display: 'flex', flexDirection: 'column' }}>
+                    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#1E3A8A' }}>边缘设备</Text>
+                    <Text style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>ESP32-S31</Text>
+                </Box>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'row', gap: 8 }}>
+                    <Box style={{ flex: 1, background: '#FFFFFF', borderRadius: 6, padding: '10px 10px', border: '1px solid #DBEAFE' }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>ws_client</Text>
+                        <Text style={{ fontSize: 12, color: '#64748B', marginTop: 6, lineHeight: 1.4 }}>长连接 / 重连</Text>
+                    </Box>
+                    <Box style={{ flex: 1, background: '#FFFFFF', borderRadius: 6, padding: '10px 10px', border: '1px solid #DBEAFE' }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>event_bus</Text>
+                        <Text style={{ fontSize: 12, color: '#64748B', marginTop: 6, lineHeight: 1.4 }}>9 种帧分发</Text>
+                    </Box>
+                    <Box style={{ flex: 1, background: '#FFFFFF', borderRadius: 6, padding: '10px 10px', border: '1px solid #DBEAFE' }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>ai_action</Text>
+                        <Text style={{ fontSize: 12, color: '#64748B', marginTop: 6, lineHeight: 1.4 }}>16 工具执行</Text>
+                    </Box>
+                    <Box style={{ flex: 1, background: '#FFFFFF', borderRadius: 6, padding: '10px 10px', border: '1px solid #DBEAFE' }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>xiaozhi</Text>
+                        <Text style={{ fontSize: 12, color: '#64748B', marginTop: 6, lineHeight: 1.4 }}>会话 + 双通道</Text>
+                    </Box>
+                    <Box style={{ flex: 1, background: '#FFFFFF', borderRadius: 6, padding: '10px 10px', border: '1px solid #DBEAFE' }}>
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>ui</Text>
+                        <Text style={{ fontSize: 12, color: '#64748B', marginTop: 6, lineHeight: 1.4 }}>浮窗 + 6 个 tab</Text>
+                    </Box>
+                </Box>
+            </Box>
+            <Text style={{ fontSize: 12, color: '#64748B', marginTop: 12 }}>
+                上行链 mic → voice_service → ws_client　·　下行链 ws_client → event_bus → ai_action / xiaozhi_service → 屏幕与喇叭
+            </Text>
+        </Box>
+    </Box>
+
+    <Box style={{
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 14,
+        padding: '12px 20px',
+        background: '#F8FAFC',
+        borderRadius: 8,
+        borderLeft: '3px solid #F59E0B',
+    }}>
+        <Text style={{ fontSize: 16, color: '#1E293B', lineHeight: 1.45 }}>
+            设备永远主动向外连 —— 这一条连接同时承担<span style={{ fontWeight: 'bold', color: '#2563EB' }}>实时对话</span>、<span style={{ fontWeight: 'bold', color: '#2563EB' }}>能力协商</span>与<span style={{ fontWeight: 'bold', color: '#2563EB' }}>云端反向控制</span>。
+        </Text>
+    </Box>
+</Slide>

@@ -1,0 +1,113 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#FFFFFF', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'column' }}>
+    <Box style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 34, fontWeight: 'bold', color: '#0F172A' }}>6 个业务模块，16 个可被云端调用的工具</Text>
+        <Text style={{ fontSize: 14, color: '#94A3B8', letterSpacing: 1 }}>01 / 能力面</Text>
+    </Box>
+    <Box style={{ width: '100%', height: 1, background: '#E2E8F0', marginTop: 14 }} />
+
+    <Box style={{ display: 'flex', flexDirection: 'row', gap: 32, marginTop: 24, height: 480 }}>
+        <Box style={{
+            width: 316,
+            height: 480,
+            background: '#0F172A',
+            borderRadius: 8,
+            padding: '28px 26px',
+            display: 'flex',
+            flexDirection: 'column',
+        }}>
+            <Text style={{ fontSize: 84, fontWeight: 'bold', color: '#FFFFFF', lineHeight: 1 }}>16</Text>
+            <Text style={{ fontSize: 15, color: '#94A3B8', marginTop: 12 }}>个可被云端调用的工具</Text>
+            <Box style={{ width: '100%', height: 1, background: '#334155', marginTop: 30, marginBottom: 30 }} />
+            <Text style={{ fontSize: 40, fontWeight: 'bold', color: '#06B6D4', lineHeight: 1 }}>6</Text>
+            <Text style={{ fontSize: 15, color: '#94A3B8', marginTop: 10 }}>个业务模块（ai_*.c）</Text>
+            <Box style={{ flex: 1 }} />
+            <Text style={{ fontSize: 15, color: '#64748B', lineHeight: 1.6 }}>
+                工具表由固件自述上行，
+                <br />
+                云端动态注册成 LLM 工具
+            </Text>
+        </Box>
+
+        <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <Box style={{ display: 'flex', flexDirection: 'row', gap: 24 }}>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: 14, borderBottom: '1px solid #F1F5F9' }}>
+                    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>camera</Text>
+                        <Text style={{ fontSize: 14, color: '#94A3B8' }}>2 个</Text>
+                    </Box>
+                    <Text style={{ fontSize: 15, color: '#1E293B', marginTop: 10, lineHeight: 1.5 }}>
+                        capture 拍照存卡 · explain 看图讲解
+                    </Text>
+                </Box>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: 14, borderBottom: '1px solid #F1F5F9' }}>
+                    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>punch</Text>
+                        <Text style={{ fontSize: 14, color: '#94A3B8' }}>1 个</Text>
+                    </Box>
+                    <Text style={{ fontSize: 15, color: '#1E293B', marginTop: 10, lineHeight: 1.5 }}>
+                        clock_in 人脸打卡（端侧识别 + 存证）
+                    </Text>
+                </Box>
+            </Box>
+
+            <Box style={{ display: 'flex', flexDirection: 'row', gap: 24 }}>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: 14, borderBottom: '1px solid #F1F5F9' }}>
+                    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>music</Text>
+                        <Text style={{ fontSize: 14, color: '#94A3B8' }}>4 个</Text>
+                    </Box>
+                    <Text style={{ fontSize: 15, color: '#1E293B', marginTop: 10, lineHeight: 1.5 }}>
+                        play 点歌 · stop 停播 · list 曲库 · download 下载
+                    </Text>
+                </Box>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: 14, borderBottom: '1px solid #F1F5F9' }}>
+                    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>speaker</Text>
+                        <Text style={{ fontSize: 14, color: '#94A3B8' }}>2 个</Text>
+                    </Box>
+                    <Text style={{ fontSize: 15, color: '#1E293B', marginTop: 10, lineHeight: 1.5 }}>
+                        get_volume 读音量 · set_volume 调音量
+                    </Text>
+                </Box>
+            </Box>
+
+            <Box style={{ display: 'flex', flexDirection: 'row', gap: 24 }}>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: 14, borderBottom: '1px solid #F1F5F9' }}>
+                    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>light</Text>
+                        <Text style={{ fontSize: 14, color: '#94A3B8' }}>4 个</Text>
+                    </Box>
+                    <Text style={{ fontSize: 15, color: '#1E293B', marginTop: 10, lineHeight: 1.5 }}>
+                        set_power · set_brightness · set_rgb · get_state
+                    </Text>
+                </Box>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingBottom: 14, borderBottom: '1px solid #F1F5F9' }}>
+                    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#2563EB', fontFamily: 'Consolas' }}>device</Text>
+                        <Text style={{ fontSize: 14, color: '#94A3B8' }}>2 个</Text>
+                    </Box>
+                    <Text style={{ fontSize: 15, color: '#1E293B', marginTop: 10, lineHeight: 1.5 }}>
+                        reboot 重启 · wifi.get_status 网络状态
+                    </Text>
+                </Box>
+            </Box>
+
+            <Box style={{ display: 'flex', flexDirection: 'row', gap: 24 }}>
+                <Box style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <Box style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#F59E0B', fontFamily: 'Consolas' }}>local</Text>
+                        <Text style={{ fontSize: 14, color: '#94A3B8' }}>1 个</Text>
+                    </Box>
+                    <Text style={{ fontSize: 15, color: '#1E293B', marginTop: 10, lineHeight: 1.5 }}>
+                        wallpaper 换壁纸（纯本地动作，引擎里没有对应工具）
+                    </Text>
+                </Box>
+                <Box style={{ flex: 1 }} />
+            </Box>
+        </Box>
+    </Box>
+
+    <Text style={{ fontSize: 14, color: '#94A3B8', marginTop: 18, fontFamily: 'Consolas' }}>
+        来源：main/middleware/ai/ai_action.c :: TOOLS[] 与 xiaozhi_service.c :: tools_attach_once()（15 个 MCP 工具 + 1 个纯本地动作）
+    </Text>
+</Slide>

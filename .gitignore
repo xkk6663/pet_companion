@@ -42,6 +42,9 @@ tools/_probe_*.ps1
 tools/_run_idf.py
 tools/_runbuild.cmd
 
-# PC host runtime artifacts (never commit)
-pc_host/.device_ip
-pc_host/firmware_store/
+# PC host runtime artifacts (pc_host tooling removed 2026-11-01)
+pc_host/
+
+# Presentation tool caches (keep slides/pptx sources, ignore generated logs)
+docs/汇报/**/.slidep/
+docs/汇报/**/.cache/

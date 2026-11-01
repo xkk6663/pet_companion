@@ -1,0 +1,12 @@
+<Slide style={{ width: 1280, height: 720, padding: '60px 60px', background: '#0F172A', fontFamily: 'Microsoft YaHei', display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+    <Box style={{ width: 400, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <Text style={{ fontSize: 150, fontWeight: 'bold', color: '#1E3A8A', lineHeight: 1 }}>02</Text>
+    </Box>
+    <Box style={{ width: 1, height: 320, background: '#334155', marginRight: 56 }} />
+    <Box style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <Text style={{ fontSize: 56, fontWeight: 'bold', color: '#FFFFFF', lineHeight: 1.25 }}>边缘端：身体如何落地</Text>
+        <Text style={{ fontSize: 18, color: '#94A3B8', lineHeight: 1.6, marginTop: 24 }}>
+            从一条 WebSocket 到一个动作之间的五级链路，以及哪些智能必须留在本地
+        </Text>
+    </Box>
+</Slide>
