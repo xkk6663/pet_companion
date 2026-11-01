@@ -24,8 +24,10 @@
 #include "page_rgb.h"
 #include "page_system.h"
 #include "page_face.h"                  /* ★ S8-1：人脸库管理页 */
+#include "page_bluetooth.h"            /* ★ A2DP：SYS > Bluetooth 子页面 */
 #include "middleware/audio/audio_service.h"
 #include "middleware/periph/button_service.h"
+#include "middleware/bluetooth/bt_audio_service.h"   /* ★ A2DP：推流数字音量 */
 
 static lv_obj_t  *s_vol_slider;
 static lv_timer_t *s_vol_timer;
@@ -33,21 +35,32 @@ static lv_timer_t *s_vol_timer;
 /* sub-page row ids */
 enum {
     ROW_WIFI = 0,
+    ROW_BLUETOOTH,                      /* ★ A2DP */
     ROW_RGB,
     ROW_SYSTEM,
     ROW_FACE,                           /* ★ S8-1 */
 };
 
-static void volume_event_cb(lv_event_t *e)
+/* 音量统一出口（滑块 0..90 = 本工程量程）：
+ *   ① 本地 codec：始终同步（无推流时是唯一出口；推流期间保持状态一致，不刺耳）；
+ *   ② BT 推流：同一滑块值映射为 aud_alc 数字增益（0..90 → 0..100）。
+ *      非推流状态下 bt_audio_service_set_volume 返回 INVALID_STATE，忽略即可
+ *      （AVRCP 音量在 A2DP Source 方向不可用，§6-R6）。 */
+static void apply_volume(int vol)
 {
-    lv_obj_t *slider = lv_event_get_target(e);
-    int vol = lv_slider_get_value(slider);
     button_service_set_volume(vol);
     audio_cmd_t cmd = {
         .id = AUDIO_CMD_SET_VOLUME,
         .value = vol,
     };
     audio_service_post_cmd(&cmd);
+    (void)bt_audio_service_set_volume(vol);
+}
+
+static void volume_event_cb(lv_event_t *e)
+{
+    lv_obj_t *slider = lv_event_get_target(e);
+    apply_volume(lv_slider_get_value(slider));
 }
 
 static void vol_timer_cb(lv_timer_t *t)
@@ -59,11 +72,7 @@ static void vol_timer_cb(lv_timer_t *t)
         if (s_vol_slider) {
             lv_slider_set_value(s_vol_slider, msg.volume, true);
         }
-        audio_cmd_t cmd = {
-            .id = AUDIO_CMD_SET_VOLUME,
-            .value = msg.volume,
-        };
-        audio_service_post_cmd(&cmd);
+        apply_volume(msg.volume);
     }
 }
 
@@ -73,6 +82,9 @@ static void row_click_cb(lv_event_t *e)
     switch (id) {
     case ROW_WIFI:
         PageManager_Load(&Page_Wifi);
+        break;
+    case ROW_BLUETOOTH:
+        PageManager_Load(&Page_Bluetooth);  /* ★ A2DP：电源/搜索/连接/断开 */
         break;
     case ROW_RGB:
         PageManager_Load(&Page_Rgb);
@@ -95,8 +107,8 @@ void tab_sys_entry_build(lv_obj_t *screen, lv_group_t *group)
 
     lv_obj_set_flex_flow(screen, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(screen, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(screen, 12, 0);
-    lv_obj_set_style_pad_top(screen, 16, 0);
+    lv_obj_set_style_pad_row(screen, 8, 0);
+    lv_obj_set_style_pad_top(screen, 10, 0);
 
     /* Title */
     lv_obj_t *title = lv_label_create(screen);
@@ -108,11 +120,13 @@ void tab_sys_entry_build(lv_obj_t *screen, lv_group_t *group)
      * ★ S8-1：高度 80 → 68。本页是**不可滚动**的全屏页（下面 lv_obj_set_scrollable
      *   (screen,false)），内容超高不是"能滚一下"，而是**最后一行被直接裁掉**——
      *   正是那种"按钮在、回调也挂了，但用户看不到也点不到"的隐性故障。
-     *   竖直预算（480 px）：pad_top 16 + 标题 16 + 6×pad_row 12 + 本卡 + 5 行 × 56
-     *   = 16+16+72+68+280 = 452 ⇒ 留 28 px 余量。
-     *   ⚠ 再加第 6 行就必须同时动这里，别只顾着加 ui_common_setting_row。 */
+     * ★ A2DP：加第 5 行（Bluetooth）后重排竖直预算（tab 内容区 800x432）：
+     *   pad_top 10 + 标题 ~34 + 6×pad_row 8(48) + 本卡 52 + 5 行 × 56(280)
+     *   = 424 ⇒ 余 8 px。
+     *   ⚠ 再加第 6 行必须先减 56+8：可行的手段只有缩本卡（52→40 以下不可读）
+     *     或把 pad_row 压到 4，别只顾着加 ui_common_setting_row。 */
     lv_obj_t *vol = lv_obj_create(screen);
-    lv_obj_set_size(vol, BSP_LCD_H_RES - 40, 68);
+    lv_obj_set_size(vol, BSP_LCD_H_RES - 40, 52);
     lv_obj_set_style_bg_color(vol, COL_CARD, 0);
     lv_obj_set_style_border_color(vol, COL_BORDER, 0);
     lv_obj_set_style_border_width(vol, 1, 0);
@@ -138,8 +152,10 @@ void tab_sys_entry_build(lv_obj_t *screen, lv_group_t *group)
         lv_group_add_obj(group, s_vol_slider);
     }
 
-    /* Resource sub-page entries（★ S8-1：加 FACE 一行，见上面 vol 卡的竖直预算） */
+    /* Resource sub-page entries（★ S8-1：加 FACE 一行，见上面 vol 卡的竖直预算）
+     * ★ A2DP：Bluetooth 紧跟 WIFI（与主线 SYS 页同序） */
     ui_common_setting_row(screen, LV_SYMBOL_WIFI, "WIFI", row_click_cb, (void *)(uintptr_t)ROW_WIFI);
+    ui_common_setting_row(screen, LV_SYMBOL_BLUETOOTH, "Bluetooth", row_click_cb, (void *)(uintptr_t)ROW_BLUETOOTH);
     ui_common_setting_row(screen, LV_SYMBOL_IMAGE, "RGB LED", row_click_cb, (void *)(uintptr_t)ROW_RGB);
     ui_common_setting_row(screen, LV_SYMBOL_LIST, "Face DB", row_click_cb, (void *)(uintptr_t)ROW_FACE);
     ui_common_setting_row(screen, LV_SYMBOL_SETTINGS, "System", row_click_cb, (void *)(uintptr_t)ROW_SYSTEM);

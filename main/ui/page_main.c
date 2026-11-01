@@ -22,6 +22,7 @@
 #include "tab_camera.h"
 #include "tab_video.h"
 #include "tab_files.h"
+#include "tab_music.h"
 #include "overlay_wallpaper.h"
 #include "pet_overlay.h"
 
@@ -31,21 +32,30 @@ static lv_obj_t  *s_tabview;
 static lv_obj_t  *s_tab_btns;
 static uint32_t   s_tab_vid_idx = 1;    /* VIDEO 页下标：建页时按实际顺序算出（见 main_create） */
 static uint32_t   s_tab_files_idx = 2;  /* FILES 页下标（S4 文件管理，同上） */
+static uint32_t   s_tab_music_idx = 3;  /* MUSIC 页下标（本地播放 / 蓝牙推流） */
 static lv_group_t *s_group_sys;
+
+/* ★★ tab 绑定的后台动作（取景流 / 文件管理页 / 本地播放页）都写在这里。
+ *   ★ 必须放在 refresh_group() **之前**：那个函数在没有 encoder 输入设备的
+ *     触摸方案下整段 early-out，把通知写进去就永远收不到。
+ *   ★ 三个 set_active 天然互斥：同一时刻只有一个 tab 活跃。
+ *   ★ page_main_play_music() 也要复用本函数 —— 因为 lv_tabview_set_active()
+ *     本身**不发** LV_EVENT_VALUE_CHANGED（见 lv_tabview.c），手动切页时必须补。 */
+static void sync_tab_side_effects(void)
+{
+    bool vid_act   = (lv_tabview_get_tab_active(s_tabview) == s_tab_vid_idx);
+    bool files_act = (lv_tabview_get_tab_active(s_tabview) == s_tab_files_idx);
+    bool music_act = (lv_tabview_get_tab_active(s_tabview) == s_tab_music_idx);
+    tab_video_set_active(vid_act);
+    tab_files_set_active(files_act);
+    tab_music_set_active(music_act);
+    page_main_refresh_group();
+}
 
 static void tab_changed_event(lv_event_t *e)
 {
     if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
-        /* ★★ tab 绑定的后台动作（取景流 / 文件管理页）都写在这里。
-         *   ★ 必须放在 refresh_group() **之前**：那个函数在没有 encoder 输入设备的
-         *     触摸方案下整段 early-out（连 s_group_* 判空都不做直接 return），
-         *     把通知写进去就永远收不到 —— 这正是本工程反复踩的"静默失效"形态。
-         *   ★ 两个 set_active 天然互斥：同一时刻只有一个 tab 活跃。 */
-        bool vid_act   = (lv_tabview_get_tab_active(s_tabview) == s_tab_vid_idx);
-        bool files_act = (lv_tabview_get_tab_active(s_tabview) == s_tab_files_idx);
-        tab_video_set_active(vid_act);
-        tab_files_set_active(files_act);
-        page_main_refresh_group();
+        sync_tab_side_effects();
     }
 }
 
@@ -78,6 +88,10 @@ static lv_obj_t *main_create(lv_obj_t *parent)
     s_tab_vid_idx = lv_tabview_get_tab_count(s_tabview) - 1;
     lv_obj_t *tab_files = lv_tabview_add_tab(s_tabview, LV_SYMBOL_LIST"  FILES");
     s_tab_files_idx = lv_tabview_get_tab_count(s_tabview) - 1;
+    /* ★ 本地音乐播放页（MUSIC）：FILES 点 .mp3 会自动切到这里并起播。
+     *   §40 REC 与 S6 SYS 依次后移 ⇒ 页序 CAM(0)/VIDEO(1)/FILES(2)/MUSIC(3)/REC(4)/SYS(5)。 */
+    lv_obj_t *tab_music = lv_tabview_add_tab(s_tabview, LV_SYMBOL_AUDIO"  MUSIC");
+    s_tab_music_idx = lv_tabview_get_tab_count(s_tabview) - 1;
     lv_obj_t *tab_rec  = lv_tabview_add_tab(s_tabview, LV_SYMBOL_AUDIO"  REC");
     lv_obj_t *tab_sys  = lv_tabview_add_tab(s_tabview, LV_SYMBOL_SETTINGS"  SYS");
 
@@ -109,6 +123,7 @@ static lv_obj_t *main_create(lv_obj_t *parent)
     tab_camera_build(tab_cam, NULL);
     tab_video_build(tab_vid, NULL);
     tab_files_build(tab_files, NULL);
+    tab_music_build(tab_music, NULL);
     tab_record_build(tab_rec, NULL);
     tab_sys_entry_build(tab_sys, s_group_sys);
 
@@ -127,6 +142,7 @@ static void main_destroy(lv_obj_t *page)
     tab_camera_destroy();
     tab_video_destroy();
     tab_files_destroy();
+    tab_music_destroy();
     tab_record_destroy();
     tab_sys_entry_destroy();
     pet_overlay_deinit();
@@ -148,13 +164,13 @@ void page_main_refresh_group(void)
     if (indev && s_group_sys && s_tabview) {
         uint16_t tab = lv_tabview_get_tab_act(s_tabview);
         lv_group_set_editing(s_group_sys, false);
-        /* ★ 页序 CAM(0)/VIDEO(1)/FILES(2)/REC(3)/SYS(4)（S6：AI tab 移除，
-         *   升级为 pet_overlay 浮窗）。
-         *   CAM/VIDEO/FILES/REC 在 build 时传的就是 NULL，**没有** encoder 组，
+        /* ★ 页序 CAM(0)/VIDEO(1)/FILES(2)/MUSIC(3)/REC(4)/SYS(5)
+         *   （S6：AI tab 移除，升级为 pet_overlay 浮窗）。
+         *   CAM/VIDEO/FILES/MUSIC/REC 在 build 时传的就是 NULL，**没有** encoder 组，
          *   所以刻意不给它们 case，落到 switch 外面保持上一个组的绑定。
          *   ★ 本分支仅在存在 ENCODER 输入设备时才会执行（触摸方案下 s_group_* 全为 NULL，
          *     整个 if 直接跳过），因此这次改动对当前硬件无影响，只是别留错。 */
-        if (tab == 4) {
+        if (tab == 5) {
             lv_group_add_obj(s_group_sys, s_tab_btns);
             lv_indev_set_group(indev, s_group_sys);
         }
@@ -167,3 +183,15 @@ const Page_t Page_Main = {
     .destroy = main_destroy,
     .name = "Main",
 };
+
+void page_main_play_music(const char *path)
+{
+    if (!s_tabview || !path || !path[0]) {
+        return;
+    }
+    /* ★ 顺序：先切 tab、后起播（2026-11-01 起切页已不再停播，
+       这里仍保持"先切后播"，保证 MUSIC 页上屏后再刷新歌词/进度）。 */
+    lv_tabview_set_active(s_tabview, s_tab_music_idx, LV_ANIM_OFF);
+    sync_tab_side_effects();          /* 手动切页不发 VALUE_CHANGED，这里补齐 */
+    tab_music_play_path(path);
+}

@@ -12,10 +12,12 @@ project(display_audio_photo)
 # 仅在素材(xwkkk.jpg/wav/icons/models)变更、换片/擦除后首次烧录时，才单独写一次：
 #
 #   idf.py storage-flash            （推荐：自动按分区表偏移/大小生成并烧录）
-#   esptool --chip esp32s31 -p COM9 write-flash build/storage.bin 0x720000
+#   esptool --chip esp32s31 -p COM9 write-flash build/storage.bin 0x7E0000
 #
-# ★★ 偏移必须以 partitions.csv 为唯一真源（本分支 S5 v1.2，2026-09-28）：
-#      storage,  data, littlefs, 0x720000, 0x8E0000
+# ★★ 偏移必须以 partitions.csv 为唯一真源（A2DP 移植后，2026-10-31）：
+#      storage,  data, littlefs, 0x7E0000, 0x820000
+#   （历史：S5 v1.2 = 0x720000/0x8E0000；A2DP 蓝牙栈把 app 撑过 7MB，
+#     ⇒ app 0x700000→0x7C0000、storage 随之后移并缩到 0x820000。）
 #   ★ 历史坑（别重蹈）：本注释曾长期写着 0x620000，而那时 0x620000 落在
 #     **ota_1 分区内部** ⇒ 按旧注释烧会**覆盖掉另一份固件**，且当场没有任何报错，
 #     只在下次 OTA 回滚时才炸。

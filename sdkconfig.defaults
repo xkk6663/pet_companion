@@ -247,8 +247,39 @@ CONFIG_AUDIO_AFE_ENABLE=y
 # CONFIG_AUDIO_ENCODER_AMRWB_SUPPORT is not set
 # CONFIG_AUDIO_ENCODER_ADPCM_SUPPORT is not set
 # CONFIG_AUDIO_ENCODER_ALAC_SUPPORT is not set
-# CONFIG_AUDIO_ENCODER_SBC_SUPPORT is not set
+## ★ A2DP Source 推流必须 SBC 编码器（aud_enc(SBC)），不能关。
+CONFIG_AUDIO_ENCODER_SBC_SUPPORT=y
 # CONFIG_AUDIO_ENCODER_LC3_SUPPORT is not set
+
+## ---------------------------------------------------------------------------
+## ★ A2DP Source 移植（2026-10-31）：经典蓝牙（BR/EDR）only
+##   照抄 display_audio_photo main 分支 sdkconfig.defaults:97-119 ——
+##   只开 A2DP + AVRCP，不开 BLE/NIMBLE/HFP，省内存。
+##   ⚠ 与 sdkconfig 同值（Kconfig 铁律）：只改一处时 reconfigure 会掉回默认，
+##     且往往到链接期才炸。
+## ---------------------------------------------------------------------------
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_CONTROLLER_ENABLED=y
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
+CONFIG_BTDM_CTRL_BR_EDR_MAX_SYNC_CONN=1
+CONFIG_BT_A2DP_ENABLE=y
+CONFIG_BT_A2DP_USE_EXTERNAL_CODEC=y
+## ★ 2026-11-01 AVRCP 无法关闭（不是配置错误）：
+##   bluedroid 的 Kconfig 里 `config BT_A2DP_ENABLE ... select BT_AVRCP_ENABLED`，
+##   AVRCP 与 A2DP 在协议栈里是硬耦合的（见 Kconfig.in:96/127-134，dummy option），
+##   手写 "# CONFIG_BT_AVRCP_ENABLED is not set" 会在 reconfigure 时被 select 覆盖回来。
+##   真机日志里的 "BT_AVCT: Out of ccbs" 来自协议栈内部 AVRCP 通道（AVCT_NUM_CONN=3），
+##   本工程这一侧**不注册** AVRCP 角色（bt_audio_service 的 classic_roles 只给 A2DP_SRC），
+##   连接成功率靠"连接节流 + esp_coex_preference_set(ESP_COEX_PREFER_BT)"来保证。
+# CONFIG_BT_HFP_ENABLE is not set
+# CONFIG_BT_BLE_ENABLED is not set
+# CONFIG_BT_NIMBLE_ENABLED is not set
+## 让 esp_bt_audio 编入 esp_gmf_io_bt 元素（推流管线的 io_bt）
+CONFIG_ESP_BT_AUDIO_GMF_IO_SUPPORT=y
+## bluedroid 内存优先 PSRAM，避免开蓝牙时内部 RAM 不足导致 HCI mempool init assert
+CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
 
 ## ★ §50 AI 对话页中文：全 CJK bin 字体从 PSRAM 加载（littlefs_content/fonts/） ##
 ## `lv_binfont_create_from_buffer()` 依赖 memfs（LV_USE_FS_MEMFS），

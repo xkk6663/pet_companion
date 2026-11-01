@@ -27,6 +27,7 @@
 #include "esp_err.h"
 
 #include "audio_service.h"
+#include "media_player_service.h"
 #include "rec_local_service.h"
 #include "middleware/mem_diag.h"
 #include "middleware/periph/sdcard_service.h"
@@ -93,9 +94,12 @@ void rec_local_service_init(void)
 {
     s_cmd_q = xQueueCreate(2, sizeof(rec_cmd_t));
     MEM_FAIL_FAST(s_cmd_q, TAG, "xQueueCreate(2, rec_cmd_t)", 2 * sizeof(rec_cmd_t));
-    /* ★ 栈必须内部 RAM：本任务做 SD 卡 FATFS IO（F35 磁盘 IO 任务栈铁律） */
-    BaseType_t ok = xTaskCreate(rec_task, "rec_task", 4096, NULL, 5, NULL);
-    MEM_FAIL_FAST(ok == pdPASS, TAG, "xTaskCreate(rec_task, 4096)", 4096);
+    /* ★ 栈必须内部 RAM：本任务做 SD 卡 FATFS IO（F35 磁盘 IO 任务栈铁律）
+     * ★ 2026-11-01 3072 -> 1536：`[stack]` 报表两次实测峰值 used=516 B
+     *   （need 折算 1024）。这里取 1536 而不是 1024 —— 留下 ~1 KB 余量供
+     *   FATFS 写盘的最深路径，同时再腾出 1.5 KB 内部 RAM。 */
+    BaseType_t ok = xTaskCreate(rec_task, "rec_task", 1536, NULL, 5, NULL);
+    MEM_FAIL_FAST(ok == pdPASS, TAG, "xTaskCreate(rec_task, 1536)", 1536);
     ESP_LOGI(TAG, "rec_local_service ready (ext EXCLUSIVE mic lease)");
 }
 
@@ -187,7 +191,15 @@ static void do_record(void)
     uint32_t written = 0;
     bool io_error = false;
 
-    /* 1. ext 独占租借：MP3/小智/WAV 播放占用期间这里 BUSY（反之亦然） */
+    /* 1. ext 独占租借：MP3/小智/WAV 播放占用期间这里 BUSY（反之亦然）
+     * ★ 2026-11-01 后台播放：音乐现在允许在别的页面继续响，
+     *   所以录音前要主动停歌并等它真正放手，否则独占租约会一直失败。 */
+    if (media_player_service_is_playing()) {
+        media_player_service_stop();
+        for (int i = 0; i < 40 && media_player_service_is_playing(); i++) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+    }
     if (audio_service_ext_claim_exclusive(&spk, &mic) != ESP_OK) {
         ESP_LOGW(TAG, "mic BUSY (mp3/xiaozhi/wav playing?)");
         notify(REC_LOC_EVT_ERROR, NULL);

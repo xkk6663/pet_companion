@@ -747,6 +747,16 @@ static void xz_task(void *arg)
             }
             if (h != NULL && cmd.url != NULL && cmd.url[0] != '\0') {
                 snprintf(dst, XZ_URL_MAX, "%s", cmd.url);
+                /* ★ 2026-11-01 现场诊断：GMF 任务/信号量只吃**内部 RAM**，
+                 *   真机曾在 `ESP_GMF_TASK: Memory exhausted`（xSemaphoreCreateBinary
+                 *   返回 NULL）→ `play tts ERROR` → TTS 整段静音。
+                 *   这一行把失败瞬间的"还剩多少、最大块多少"钉死，下次复现直接对照：
+                 *     INT free 若还有几十 KB 而 largest 很小 → 碎片；
+                 *     INT free 本身就接近 0 → 被 AFE/相机/WiFi 占满。 */
+                ESP_LOGI(TAG, "tts mem pre: INT free=%u largest=%u | PSRAM free=%u",
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
                 esp_err_t err = audio_playback_play(h, dst);
                 ESP_LOGI(TAG, "play %s: %s (%.64s)",
                          is_music ? "music" : "tts", esp_err_to_name(err), dst);

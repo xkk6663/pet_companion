@@ -3,7 +3,7 @@
 #include <filesystem>
 
 /* 本工程只走 SDCARD（littlefs）模式；FLASH_RODATA/PARTITION 分支已裁掉，
- * 模型文件在 /littlefs/models/（littlefs_content/models/ 烧录到 storage 分区（S5 v1.2 起偏移 0x720000））。 */
+ * 模型文件在 /littlefs/models/（littlefs_content/models/ 烧录到 storage 分区（2026-10-31 起偏移 0x7E0000））。 */
 
 namespace hand_detect {
 ESPDet::ESPDet(const char *model_name, float score_thr, float nms_thr)

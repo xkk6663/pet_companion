@@ -44,7 +44,7 @@ typedef enum {
 typedef void (*rec_loc_evt_cb_t)(rec_loc_evt_id_t evt, const char *path);
 
 /**
- * @brief 初始化：创建命令队列 + 常驻 rec_task（4096，内部 RAM）
+ * @brief 初始化：创建命令队列 + 常驻 rec_task（3072，内部 RAM）
  */
 void rec_local_service_init(void);
 

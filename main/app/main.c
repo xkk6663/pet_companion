@@ -24,6 +24,8 @@
 #include "middleware/audio/audio_service.h"
 #include "middleware/audio/rec_local_service.h"
 #include "middleware/audio/media_player_service.h"
+#include "middleware/bluetooth/bt_audio_service.h"   /* ★ A2DP Source 底座 */
+#include "middleware/bluetooth/bt_push_service.h"    /* ★ A2DP Source 推流管线 */
 #include "middleware/ai/xiaozhi_service.h"
 #include "middleware/ai/cloud_media_service.h"   /* ★ S9 P6：云端生图落盘 */
 #include "middleware/periph/fs_service.h"
@@ -661,8 +663,8 @@ static const task_slot_t s_task_reg[] = {
      *   回退条件：回归后任一任务被判"偏紧"或出现栈溢出症状。 */
     { "taskLVGL",       9728 },   /* 峰值 6396→6576（2026-09-28 复测），need=9864 ⇒ 略欠 512 B */
     { "audio_task",      2048 },  /* 峰值 756 */
-    { "rec_task",        4096 },  /* §40 本地录音：SD FATFS IO，内部栈（F35） */
-    { "net_time",        8192 },  /* 峰值 4296，吃满一半，不动 */
+    { "rec_task",        1536 },  /* §40 本地录音：SD FATFS IO，内部栈（F35）；峰值 516 ⇒ 3072→1536（2026-11-01） */
+    { "net_time",        6144 },  /* 峰值 4296（含 TLS）⇒ 8192→6144，为 BT host 让 2 KB */
     { "cam",             3584 },  /* 两次观测大者 2140（含同步写盘路径）×1.5 */
     { "led_task",        1536 },  /* 峰值 656 */
 };
@@ -749,6 +751,20 @@ void app_main(void)
      *   32KB DMA bounce buffer 与 FATFS 工作区最容易分配成功（与 main 分支同序）。 */
     sdcard_service_mount();
     MEM_STAGE(TAG, "after sdcard_service_mount");
+
+    /* ★ A2DP 移植（§4.2）：蓝牙早期窗口 —— fs_service/audio_service/LCD/WiFi 都还没起，
+     *   内部 RAM 最空、PSRAM 还没被切碎。这里只做两件事：
+     *   ① controller（HCI 内存池）一次性 init + enable(CLASSIC_BT)，之后常驻；
+     *   ② Source 推流 pool/pipeline/task（方案 B「延迟常驻」：首次 ALLOCATED 才建管线）。
+     *   host（bluedroid）**不在这里上电** —— 每次 set_power(true) 都是一次真实
+     *   init/deinit（纪律 1），由用户进音乐页点蓝牙开关时再触发，闸门兜底。
+     *   顺序：init() 只登记回调（push 层 finished → 本次收尾），必须早于 early_init 之后的
+     *   任何推流；放最前无副作用。 */
+    bt_audio_service_init(NULL, NULL);
+    bt_audio_service_controller_init();
+    MEM_STAGE(TAG, "after bt_audio_service_controller_init");
+    bt_push_service_early_init();
+    MEM_STAGE(TAG, "after bt_push_service_early_init");
 
     /* ★ S8-1：人脸库（可选介质）—— **故意不用 ESP_ERROR_CHECK**：
      *   没插卡时只降级（is_ready()==false），人脸检测/预览/录像等其它功能必须照常，

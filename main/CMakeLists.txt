@@ -3,6 +3,10 @@ idf_component_register(SRCS
                         "middleware/audio/audio_service.c"
                         "middleware/audio/rec_local_service.c"
                         "middleware/audio/media_player_service.c"
+                        ## ---- A2DP Source 移植：蓝牙底座 + 推流管线 + LRC 解析 ----
+                        "middleware/bluetooth/bt_audio_service.c"
+                        "middleware/bluetooth/bt_push_service.c"
+                        "middleware/audio/lrc_service.c"
                         "middleware/ai/xiaozhi_service.c"
                         ## ---- S9 桌宠伴侣：云端长连接 / 语音上行 / 下行事件分发 / 云端媒体 ----
                         "middleware/ai/ws_client.c"
@@ -58,11 +62,14 @@ idf_component_register(SRCS
                         "ui/tab_camera.c"
                         "ui/tab_video.c"
                         "ui/tab_files.c"
+                        "ui/tab_music.c"
                         "ui/tab_sys_entry.c"
                         "ui/overlay_wallpaper.c"
                         "ui/page_wifi.c"
                         "ui/page_rgb.c"
                         "ui/page_system.c"
+                        ## ---- A2DP：SYS > Bluetooth 子页面（电源/搜索/连接/断开）----
+                        "ui/page_bluetooth.c"
                         ## ---- S8-1：人脸库管理页（SYS 页入口，页栈子页）----
                         "ui/page_face.c"
                         "ui/overlay_wp_particles.c"
@@ -74,6 +81,7 @@ idf_component_register(SRCS
                                     "ui/ui_manager"
                                     "middleware"
                                     "middleware/audio"
+                                    "middleware/bluetooth"
                                     "middleware/ai"
                                     "middleware/net"
                                     "middleware/periph"
@@ -95,7 +103,11 @@ idf_component_register(SRCS
                                     esp_player esp_audio_render esp_extractor esp_audio_codec
                                     media_lib_sal gmf_core gmf_audio gmf_io
                                     av_processor gmf_ai_audio esp-sr esp_xiaozhi esp-tls
-                                    fatfs sdmmc)
+                                    fatfs sdmmc
+                                    ## ---- A2DP Source 移植：esp_bt_audio 自带 gmf_core/gmf_io/esp_audio_codec，
+                                    ##      bt 提供 esp_bt.h / esp_bt_main.h（bluedroid 协议栈本体）
+                                    ##      esp_coex 提供 esp_coexist.h（开 BT 时射频偏向蓝牙）
+                                    esp_bt_audio bt esp_coex)
 
 # =============================================================================
 #  ★★ OV3660 **私有**寄存器表（2026-09-25，S2-0 运行时切格式用）
@@ -138,6 +150,24 @@ if(_mcp_lib)
     target_compile_options(${_mcp_lib} PRIVATE -Wno-error=stringop-truncation)
 else()
     message(WARNING "mcp-c-sdk target not found; GCC15 strncpy patch skipped")
+endif()
+
+# =============================================================================
+#  ★ A2DP 移植：bluedroid / esp_bt_audio × GCC 15.2 兼容补丁（§6-R4）
+#
+#  现象：bluedroid 老源码大量 `strncpy(dst, src, sizeof(dst) - 1)` 截断写法，
+#        GCC 15 的 -Wstringop-truncation 在 IDF 全局 -Werror 下直接编译失败。
+#  处置：与上面 mcp 先例一致 —— 只对这两个组件的 target 把该告警降回 warning，
+#        不全局开 CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS（那会掩盖全工程的告警）。
+# =============================================================================
+idf_component_get_property(_bt_lib bt COMPONENT_LIB)
+if(_bt_lib)
+    target_compile_options(${_bt_lib} PRIVATE -Wno-error=stringop-truncation)
+endif()
+
+idf_component_get_property(_bt_audio_lib esp_bt_audio COMPONENT_LIB)
+if(_bt_audio_lib)
+    target_compile_options(${_bt_audio_lib} PRIVATE -Wno-error=stringop-truncation)
 endif()
 
 

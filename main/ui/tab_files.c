@@ -34,6 +34,7 @@
 #include "middleware/periph/sdcard_service.h"
 #include "middleware/camera/viewfinder.h"   /* ★ 2026-09-28 按需化：预览/播放借它的解码缓冲 */
 #include "middleware/media/wallpaper_service.h"   /* ★ §75 补充 1：壁纸池手动切换 */
+#include "page_main.h"                            /* ★ A2DP 移植：mp3 跳转 MUSIC tab */
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -257,8 +258,17 @@ static void open_path(const char *name, bool is_dir)
      * MP3 用 mp3 解，WAV 用 wav 容器 + PCM 解；rec_local 录的 16k WAV
      * 由 render proc 链（rate_cvt）重采样到 44.1k 输出）。
      * 与 AVI 正交：互斥由 audio_service ext 协议（REC/小智独占租借）保证。
-     * ★ §43 修：原只认 .mp3，rec_local 录的 .wav 落到 "Unsupported"。 */
+     * ★ §43 修：原只认 .mp3，rec_local 录的 .wav 落到 "Unsupported"。
+     * ★ 2026-10 蓝牙移植：点 .mp3 **自动切到 MUSIC tab** 并在那里起播，
+     *   同时加载同名 .lrc（找不到歌词则显示"无"）。WAV（录音文件）没有歌词，
+     *   继续留在 FILES 页就地播放。 */
     if (ext != NULL && (strcasecmp(ext, ".mp3") == 0 || strcasecmp(ext, ".wav") == 0)) {
+        if (strcasecmp(ext, ".mp3") == 0) {
+            lv_label_set_text_static(s_status, "Playing MP3 (MUSIC tab)");
+            lv_obj_set_style_text_color(s_status, COL_TEXT, 0);
+            page_main_play_music(full);
+            return;
+        }
         s_mode = MODE_MP3;
         s_pv_shown = false;
         apply_mode_visibility();
@@ -749,7 +759,7 @@ void tab_files_destroy(void)
 {
     file_mgr_cmd_t cmd = { .id = FMC_STOP };
     file_mgr_post_cmd(&cmd);                    /* 播放中退出主页面：请求停止 */
-    media_player_service_stop();                /* MP3 同理（幂等，未播放无害） */
+    /* ★ 2026-11-01 后台播放：不再顺带停本地音乐 */
 
     /* ★ 2026-09-28 按需化：页面销毁兜底归还取景器缓冲（页面可能停在预览/播放态）。
      *  ⚠ 同样要守卫 —— do_play() 可能还没收到上面的 STOP。那种情况下**不 release**：
@@ -801,9 +811,8 @@ void tab_files_set_active(bool active)
             file_mgr_cmd_t cmd = { .id = FMC_STOP };
             file_mgr_post_cmd(&cmd);
         }
-        if (media_player_service_is_playing()) {
-            media_player_service_stop();
-        }
+        /* ★ 2026-11-01 后台播放：离开 FILES 页不再停本地音乐
+           （音乐所有权在 media_player_service，本页只管文件操作）。 */
         enter_browse_mode();
     }
 }

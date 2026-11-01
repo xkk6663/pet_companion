@@ -42,7 +42,11 @@
 
 static const char *TAG = "NET_TIME";
 
-#define NET_TIME_TASK_STACK   8192      /* 业务任务栈不得 < 8192（HTTP + cJSON 会吃栈） */
+/* ★ 2026-11-01 8192 -> 6144：本任务只做 SNTP + 和风 HTTPS 取 JSON，
+ *   历史峰值 used=4296 B（含 TLS 握手，见 app/main.c 栈表注释），
+ *   6144 仍留 1.8 KB 余量；省下的 2 KB 内部 RAM 让给 BT host。
+ *   回退条件：`[stack]` 报表 net_time 出现 hwm < 768 B（判"偏紧"）⇒ 恢复 8192。 */
+#define NET_TIME_TASK_STACK   6144
 #define NET_TIME_TASK_PRIO    4
 #define NET_TIME_TASK_CORE    0
 

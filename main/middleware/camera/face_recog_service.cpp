@@ -81,6 +81,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"            /* xTaskCreatePinnedToCoreWithCaps / vTaskDeleteWithCaps */
 
 #include <stdio.h>
 #include <string.h>
@@ -164,6 +165,17 @@ static const char RECOG_MFN_PATH[] =
  *   ③ 当年 S8-0 探针就是用 **10240 B 的专用任务**跑通这条链路并打出 PROBE PASS 的
  *      ⇒ 10240 是**实测过的数**，不是估的。 */
 #define RECOG_LOAD_STACK   10240
+
+/** ★ 2026-11-01 真机：`xTaskCreate(recog_load) FAILED (internal RAM tight, stack=10240)`
+ *  —— 内部 RAM 只剩 ~27 KB 且最大连续块 8704 B，10 KB 内部栈**凑不出来**，
+ *  所以模型永远加载不了（打卡一直 state=0）。
+ *  改为把栈放 PSRAM（`xTaskCreatePinnedToCoreWithCaps`），TCB 仍由内部 RAM 分配。
+ *  F35 合规性：本文件两条任务**只读 SD 卡上的 .espdl 模型**（FATFS 读不关
+ *  flash cache），不碰 NVS/littlefs/任何 flash 写 —— 与 ai_camera.c 的
+ *  "SD FATFS 读写 ⇒ PSRAM 栈安全（F35 只禁 NVS/littlefs/flash IO）"同一判据。
+ *  任务用 PSRAM 栈后，自删必须用 `vTaskDeleteWithCaps(NULL)`，
+ *  否则这条栈会用普通 free 回收（caps 不匹配）。 */
+#define RECOG_TASK_MEM_CAPS   (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 
 /* ---------------------------------------------------------------------------
  *  MFN —— 复刻官方 human_face_recognition::MFN（修正见文件头）
@@ -759,7 +771,7 @@ void recog_task(void *arg)
              (unsigned)s_runs, (unsigned)s_kp_bad,
              s_runs ? (100.0 * (double)s_kp_bad / (double)s_runs) : 0.0);
 
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);        /* PSRAM 栈必须用 WithCaps 回收 */
 }
 
 } // namespace
@@ -802,7 +814,7 @@ static void recog_load_task(void *arg)
     ESP_LOGI(TAG, "recog load task stack hwm=%u B (size=%d) - tune RECOG_LOAD_STACK with this",
              (unsigned)uxTaskGetStackHighWaterMark(NULL), RECOG_LOAD_STACK);
     s_load_running = false;           /* ★ 先清 running 再自删：stop() 看它决定能不能卸载 */
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);        /* PSRAM 栈必须用 WithCaps 回收 */
 }
 
 /* ---------------------------------------------------------------------------
@@ -852,13 +864,14 @@ void face_recog_poll(void)
 
     s_load_pending = false;
     s_load_running = true;
-    ESP_LOGI(TAG, "starting recog load task (MSR+MNP+MFN, stack=%d)...", RECOG_LOAD_STACK);
-    if (xTaskCreatePinnedToCore(recog_load_task, "recog_load", RECOG_LOAD_STACK, nullptr,
-                                RECOG_TASK_PRIO, nullptr, RECOG_TASK_CORE) != pdPASS) {
-        /* ★ 内部 RAM 紧张时如实报错，不静默降级（本工程一贯口径）。 */
+    ESP_LOGI(TAG, "starting recog load task (MSR+MNP+MFN, stack=%d, PSRAM)...", RECOG_LOAD_STACK);
+    if (xTaskCreatePinnedToCoreWithCaps(recog_load_task, "recog_load", RECOG_LOAD_STACK, nullptr,
+                                        RECOG_TASK_PRIO, nullptr, RECOG_TASK_CORE,
+                                        RECOG_TASK_MEM_CAPS) != pdPASS) {
+        /* ★ PSRAM 栈也建不起来才报错（内部 RAM 只剩 TCB 的那几十字节需求）。 */
         s_load_running = false;
         s_state        = FACE_FAIL;
-        ESP_LOGE(TAG, "xTaskCreate(recog_load) FAILED (internal RAM tight, stack=%d)",
+        ESP_LOGE(TAG, "xTaskCreate(recog_load) FAILED (PSRAM tight, stack=%d)",
                  RECOG_LOAD_STACK);
     }
 }
@@ -1005,13 +1018,14 @@ esp_err_t face_recog_submit(const uint16_t *rgb565le, uint16_t w, uint16_t h, re
 
     s_job_running = true;
 
-    BaseType_t ok = xTaskCreatePinnedToCore(recog_task, "recog_run",
-                                            RECOG_TASK_STACK, nullptr,
-                                            RECOG_TASK_PRIO, nullptr, RECOG_TASK_CORE);
+    BaseType_t ok = xTaskCreatePinnedToCoreWithCaps(recog_task, "recog_run",
+                                                    RECOG_TASK_STACK, nullptr,
+                                                    RECOG_TASK_PRIO, nullptr, RECOG_TASK_CORE,
+                                                    RECOG_TASK_MEM_CAPS);
     if (ok != pdPASS) {
-        /* ★ 内部 RAM 紧张时如实报错，不静默降级（本工程一贯口径）。 */
+        /* ★ 同一口径：栈走 PSRAM，只有 PSRAM 也凑不出这块才失败。 */
         s_job_running = false;
-        ESP_LOGE(TAG, "xTaskCreate(recog_run) FAILED (internal RAM tight, stack=%d)",
+        ESP_LOGE(TAG, "xTaskCreate(recog_run) FAILED (PSRAM tight, stack=%d)",
                  RECOG_TASK_STACK);
         return ESP_ERR_NO_MEM;
     }
