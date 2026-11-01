@@ -752,17 +752,20 @@ void app_main(void)
     sdcard_service_mount();
     MEM_STAGE(TAG, "after sdcard_service_mount");
 
-    /* ★ A2DP 移植（§4.2）：蓝牙早期窗口 —— fs_service/audio_service/LCD/WiFi 都还没起，
-     *   内部 RAM 最空、PSRAM 还没被切碎。这里只做两件事：
-     *   ① controller（HCI 内存池）一次性 init + enable(CLASSIC_BT)，之后常驻；
-     *   ② Source 推流 pool/pipeline/task（方案 B「延迟常驻」：首次 ALLOCATED 才建管线）。
-     *   host（bluedroid）**不在这里上电** —— 每次 set_power(true) 都是一次真实
-     *   init/deinit（纪律 1），由用户进音乐页点蓝牙开关时再触发，闸门兜底。
-     *   顺序：init() 只登记回调（push 层 finished → 本次收尾），必须早于 early_init 之后的
-     *   任何推流；放最前无副作用。 */
+    /* ★ A2DP 移植（§4.2）：只登记回调 + 建推流池，**不上电 BT controller**。
+     *   ★★ 2026-11-01 语音卡顿回归：原实现在这里 `bt_audio_service_controller_init()`
+     *     —— 开机就把 BT controller enable 到 Core0 并常驻，于是
+     *       · Core0 多一路高优先级 controller 任务，麦克风 AFE feed（prio 5）被挤；
+     *       · 内部 RAM 再少一块（打卡会话只剩 INT largest ~7 KB，见 2026-11-01 日志）；
+     *       · 只要 controller 在，WiFi/BT SW coexist 一直生效，云端 TTS 流被分走时隙。
+     *     三者都会让"发回来的语音"变得卡顿（xrun/AFE ringbuffer empty）。
+     *   ⇒ controller 改为**懒上电**：第一次 `bt_audio_service_set_power(true)`
+     *     时才 init+enable（`bt_audio_service_controller_init()` 已做成幂等）。
+     *     ALLOCATION_FROM_SPIRAM_FIRST=y ⇒ HCI 池在 PSRAM（此时仍有 ~5.8 MB 连续块），
+     *     不再依赖"开机空窗期"。
+     *   host（bluedroid）本来就不在这里上电（每次 set_power(true) 都是一次真实
+     *   init/deinit，纪律 1）。 */
     bt_audio_service_init(NULL, NULL);
-    bt_audio_service_controller_init();
-    MEM_STAGE(TAG, "after bt_audio_service_controller_init");
     bt_push_service_early_init();
     MEM_STAGE(TAG, "after bt_push_service_early_init");
 

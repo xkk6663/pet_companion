@@ -69,6 +69,12 @@ CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE=n
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
 ## WiFi/lwIP/TCP 缓冲改从 PSRAM 拿，给内部 RAM 腾出连续块。
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+## ★ 2026-11-01：mbedTLS 全部改从 PSRAM 分配（TLS IN 16KB + OUT 4KB + 上下文）。
+##   这是本工程**最大的一笔"可变尺寸、高频建立/拆除"的内部堆分配**：
+##   每条 HTTPS(TLS) 连接握手一次就切一刀内部堆 —— 是 `largest` 被切碎的主要来源之一。
+##   代价：PSRAM 分配失败时 mbedTLS **没有内部回落**（esp_mem.c 走严格的
+##   MALLOC_CAP_SPIRAM），但本工程 PSRAM 常驻 5.8MB，握手只需几十 KB，足够。
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 ## （第三项曾是 CONFIG_BSP_LCD_RGB_BOUNCE_BUFFER_HEIGHT=10，2026-09-25 已随
 ##  bounce buffer → auto refresh 的切换一并删除，见上面 display 段：那整块内部
 ##  DMA 缓冲现在**不再分配**，等于又多省 32,000 B 内部 RAM。）
@@ -108,6 +114,15 @@ CONFIG_LV_FS_POSIX_LETTER=76
 CONFIG_LV_FS_POSIX_PATH_MAX=256
 CONFIG_LV_USE_PNG=y
 CONFIG_LV_USE_LODEPNG=y
+
+## 中文输入法（AI 对话框软键盘的拼音输入）##
+## 用 LVGL 自带 lv_ime_pinyin：26 键 + 候选面板，候选字用 ui_binfont（全 CJK 字表）。
+## CAND_TEXT_NUM=4 是按 800 px 宽候选条算的：4 个候选 + 「<」「>」+ 空位 = 7 格，
+## 每格 ~106 px，28 px 字体下正好放得下 3 个汉字；取 6 会挤到 83 px 被裁字。
+CONFIG_LV_USE_IME_PINYIN=y
+# CONFIG_LV_IME_PINYIN_USE_K9_MODE is not set
+CONFIG_LV_IME_PINYIN_USE_DEFAULT_DICT=y
+CONFIG_LV_IME_PINYIN_CAND_TEXT_NUM=4
 CONFIG_CAMERA_OV3660=y
 
 

@@ -223,6 +223,12 @@ void bt_audio_service_init(bt_audio_evt_cb_t cb, void *ctx)
 /* 开机早期调用：此时 LCD/WiFi/摄像头/GMF 都还没起，内部 RAM 最空最连续。 */
 void bt_audio_service_controller_init(void)
 {
+    /* ★ 幂等：既可以被开机流程调，也可以被 set_power(true) 懒调（2026-11-01 起
+     *   默认走懒上电 —— controller 常驻会压麦克风/AFE 与 WiFi 时隙，见 main.c 注释）。 */
+    if (s_controller_ready) {
+        return;
+    }
+
     ESP_LOGI(TAG, "early controller init: free internal=%d largest=%d free PSRAM=%d",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
@@ -241,7 +247,9 @@ void bt_audio_service_controller_init(void)
         return;
     }
     s_controller_ready = true;
-    ESP_LOGI(TAG, "controller ready (host off)");
+    ESP_LOGI(TAG, "controller ready (host off) | internal free=%d largest=%d",
+             heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }
 
 /* 开 host 前的内部 RAM 体检（每次打开都必须走，见头文件说明） */
@@ -280,7 +288,13 @@ esp_err_t bt_audio_service_set_power(bool on)
 
     if (on) {
         if (!s_controller_ready) {
-            ESP_LOGE(TAG, "controller not ready (early init failed)");
+            /* ★ 懒上电（2026-11-01）：开机不再常驻 controller —— 它会在 Core0 上
+             *   压麦克风 AFE 与 WiFi 时隙，把云端 TTS 挤成卡顿。第一次真要开蓝牙时
+             *   才在这里 init+enable；失败就按"蓝牙不可用"返回，不崩。 */
+            bt_audio_service_controller_init();
+        }
+        if (!s_controller_ready) {
+            ESP_LOGE(TAG, "controller not ready (lazy init failed)");
             return ESP_ERR_INVALID_STATE;
         }
         /* 体检必须放在 esp_bt_audio_init() 之前（进去后再失败无法优雅退出） */

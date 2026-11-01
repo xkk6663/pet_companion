@@ -14,10 +14,12 @@
 
 #include "sdcard_service.h"
 #include "net_time_service.h"
+#include "mem/static_pool.h"          /* ★ 编译期静态内部池：打卡任务栈 */
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"   /* xTaskCreateStaticPinnedToCore（静态栈 + 绑核） */
 
 #include <dirent.h>
 #include <errno.h>
@@ -586,10 +588,17 @@ static void rmdir_empty_subdirs(const char *root)
     closedir(d);
 }
 
-/** 一次性任务：写一条打卡 或 清空记录。 */
+/** 常驻工单任务：写一条打卡 / 清空记录 / 删单条 / 对账 —— 一次通知干一单。 */
 static void punch_task(void *arg)
 {
     (void)arg;
+
+    /* ★★ 常驻工单循环（原因见 spawn_task 头注释）：
+     *   没有工单就睡在通知上，有通知才干活；**干完不删自己**，回到这里等下一单。
+     *   静态 TCB 绝不能被第二次 create 复用 —— 否则前一个实例还在
+     *   `xTasksWaitingTermination` 里，链表会被覆写 ⇒ idle 清理时崩。 */
+job_wait:
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
     TickType_t t0 = xTaskGetTickCount();
     punch_record_t res;
@@ -915,20 +924,59 @@ finish:
         ESP_LOGI(TAG, "punch jpeg out buffer freed (%u B back)", (unsigned)JPEG_UTIL_OUT_MAX);
     }
 
-    vTaskDelete(NULL);
+    /* ★ 不 vTaskDelete(NULL)：见 spawn_task 头注释（静态 TCB 复用会写坏终止链表） */
+    goto job_wait;
 }
 
-/** 起一次性任务。返回 ESP_OK 表示已受理。 */
+/** 起一次性任务。返回 ESP_OK 表示已受理。
+ *
+ *  ★ 2026-11-01：栈改成**编译期静态池**里的固定块（`mem/static_pool.h`）。
+ *    这条任务每次打卡都要建一次、跑几十~几百 ms，是全工程最典型的
+ *    "固定尺寸 + 反复分配"对象。改成静态块后：
+ *      · 不再向内部堆要 4 KB ⇒ 打卡开始时（相机/音频把内部堆切得最碎的时刻）
+ *        也**必定**建得起来（原来就是 `xTaskCreate FAILED (internal RAM tight)`）；
+ *      · 反复打卡不再产生"申请 4 KB / 释放 4 KB"的堆抖动。
+ *
+ *  ★★ 第二版（真机崩溃后改，别再改回去）：**建一次、永不删、用通知交工单**。
+ *    静态任务的栈/TCB 由调用方提供、FreeRTOS **不会回收**；原先"每次 spawn 都
+ *    create + 任务末尾 vTaskDelete(NULL)"的写法，会让前一个实例还挂在
+ *    `xTasksWaitingTermination` 上（等 idle 清理）时，下一次 create 就复用同一个
+ *    `StaticTask_t` ⇒ `prvInitialiseNewTask` 覆写 `xStateListItem` ⇒ 链表写坏
+ *    ⇒ idle 的 `uxListRemove` 崩（真机实测：Core1 Load access fault @ list.c:207）。
+ *    同轮 `recog_read` 就是这么崩的（MSR/MNP/MFN 连续三次读）。 */
 static esp_err_t spawn_task(void)
 {
-    BaseType_t ok = xTaskCreatePinnedToCore(punch_task, "punch",
-                                            PUNCH_TASK_STACK, NULL,
-                                            PUNCH_TASK_PRIO, NULL, PUNCH_TASK_CORE);
-    if (ok != pdPASS) {
-        ESP_LOGE(TAG, "xTaskCreate(punch) FAILED (internal RAM tight)");
-        s_busy = false;
-        return ESP_ERR_NO_MEM;
+    static StackType_t  *s_punch_stack  = NULL;
+    static StaticTask_t  s_punch_tcb;
+    static TaskHandle_t  s_punch_worker = NULL;
+
+    if (s_punch_worker == NULL) {
+        if (s_punch_stack == NULL) {
+            s_punch_stack = (StackType_t *)static_pool_alloc(PUNCH_TASK_STACK, "punch");
+            if (s_punch_stack == NULL) {
+                ESP_LOGE(TAG, "static pool has no room for punch stack (%d B) | "
+                              "INT free=%u largest=%u",
+                         PUNCH_TASK_STACK,
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                s_busy = false;
+                return ESP_ERR_NO_MEM;
+            }
+        }
+        s_punch_worker = xTaskCreateStaticPinnedToCore(punch_task, "punch",
+                                                       PUNCH_TASK_STACK, NULL,
+                                                       PUNCH_TASK_PRIO, s_punch_stack,
+                                                       &s_punch_tcb, PUNCH_TASK_CORE);
+        if (s_punch_worker == NULL) {
+            ESP_LOGE(TAG, "xTaskCreateStatic(punch) FAILED");
+            s_busy = false;
+            return ESP_ERR_NO_MEM;
+        }
+        ESP_LOGI(TAG, "punch worker up (resident, internal stack %d B)", PUNCH_TASK_STACK);
     }
+
+    /* ★ 工单已在 s_pend_* / s_op_* 里，通知一次就开工 */
+    xTaskNotifyGive(s_punch_worker);
     return ESP_OK;
 }
 

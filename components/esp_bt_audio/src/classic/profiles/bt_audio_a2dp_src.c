@@ -617,6 +617,15 @@ static esp_err_t a2dp_src_media_stop()
 
 static void bt_a2d_event_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *p_param)
 {
+    /* 关蓝牙时 esp_a2d_source_deinit() 会异步抛出 DISCONNECTED 等事件，
+       而 bt_audio_a2dp_src_deinit() 早已 free(a2dp_src) 并置 NULL。
+       所有分支都直接解引用 a2dp_src，这里必须统一拦住，否则就是 NULL 写 ⇒
+       Store access fault（真机日志 MCAUSE 7 / MTVAL 0）。 */
+    if (!a2dp_src) {
+        ESP_LOGD(TAG, "%s event %d ignored: source deinitialized", __func__, (int)event);
+        return;
+    }
+
     ESP_LOGD(TAG, "%s event: %d", __func__, event);
 
     esp_a2d_cb_param_t *a2d = NULL;
@@ -866,8 +875,12 @@ esp_err_t bt_audio_a2dp_src_deinit()
     esp_a2d_source_deinit();
     esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
 
-    free(a2dp_src);
+    /* 先摘掉全局指针再 free：上面的 esp_a2d_source_deinit() 会让 Bluedroid
+       异步回调 DISCONNECTED 等事件，bt_a2d_event_cb 在入口读这个全局，
+       必须先置 NULL 才能保证不会拿到已释放的地址。 */
+    a2dp_src_ctx_t *ctx = a2dp_src;
     a2dp_src = NULL;
+    free(ctx);
 
     ESP_LOGI(TAG, "A2DP source deinitialized");
     return ESP_OK;

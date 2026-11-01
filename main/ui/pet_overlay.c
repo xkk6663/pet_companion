@@ -154,6 +154,8 @@ static bool s_pv_video_prev;
 
 /* 键盘层 */
 static lv_obj_t *s_kb_root, *s_kb_ta, *s_kb;
+/* 拼音 IME（把 s_kb 的按键转成汉字候选；候选条是它的子对象） */
+static lv_obj_t *s_ime;
 
 static lv_timer_t   *s_timer;
 static QueueHandle_t s_evt_q;
@@ -731,6 +733,11 @@ static void key_req_drain(void)
         lv_obj_set_hidden(s_kb_root, false);
         lv_textarea_set_text(s_kb_ta, "");
         lv_keyboard_set_textarea(s_kb, s_kb_ta);
+        /* 上一次可能停在"拼音打了一半"的状态：候选条残留旧字，先收起。
+           （IME 内部的输入缓存只有入口 Enter 才会清，残留最多是选字时多删几个字符，无副作用） */
+        if (s_ime) {
+            lv_obj_set_hidden(lv_ime_pinyin_get_cand_panel(s_ime), true);
+        }
     }
     if (s_local_say[0]) {
         char tmp[PET_LINE_MAX];
@@ -1156,7 +1163,7 @@ void pet_overlay_init(void)
     lv_obj_set_hidden(s_kb_root, true);
 
     lv_obj_t *kbtitle = lv_label_create(s_kb_root);
-    lv_label_set_text_static(kbtitle, "文字输入（英文/拼音；中文请用按住说话）");
+    lv_label_set_text_static(kbtitle, "文字输入（英文 / 拼音，选候选字即输入中文）");
     lv_obj_set_style_text_color(kbtitle, COL_SUBTEXT, 0);
     lv_obj_set_style_text_font(kbtitle, pet_font(), 0);
     lv_obj_align(kbtitle, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -1166,10 +1173,11 @@ void pet_overlay_init(void)
     lv_obj_align(s_kb_ta, LV_ALIGN_TOP_MID, 0, 34);
     lv_textarea_set_one_line(s_kb_ta, true);
     lv_textarea_set_max_length(s_kb_ta, 120);
-    /* ★ 占位符必须全 ASCII：它跟 textarea 用同一字体（montserrat），
-     *   混中文会画成方框。 */
+    /* ★ 占位符必须全 ASCII：字体在 binfont 缺失时会回退 cn_20（小字表），
+     *   中文占位符可能出方框；ASCII 在任何一档都有。 */
     lv_textarea_set_placeholder_text(s_kb_ta, "Type here ...");
-    lv_obj_set_style_text_font(s_kb_ta, UI_FONT_BIG, 0);
+    /* 输入框要能显示中文 ⇒ 用全 CJK 的 pet_font()，不能用 UI_FONT_BIG（montserrat）。 */
+    lv_obj_set_style_text_font(s_kb_ta, pet_font(), 0);
 
     lv_obj_t *ok = mk_btn(s_kb_root, 110, 48, COL_GREEN, true);
     lv_obj_align(ok, LV_ALIGN_TOP_RIGHT, -130, 96);
@@ -1195,6 +1203,23 @@ void pet_overlay_init(void)
     lv_keyboard_set_textarea(s_kb, s_kb_ta);
     lv_obj_add_event_cb(s_kb, kb_ready_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_kb, kb_cancel_cb, LV_EVENT_CANCEL, NULL);
+
+    /* ★ 中文输入：LVGL 自带拼音 IME（26 键 + 候选条），挂在键盘上。
+     *   要点：
+     *   1) 候选条是 IME 的子对象，由 lv_ime_pinyin_set_keyboard() 挂到键盘
+     *      的父对象并对齐到键盘上方 —— 所以必须**先**有 s_kb 再 binding。
+     *   2) 字体必须用 pet_font()（ui_binfont 全 CJK 字表）。默认 montserrat /
+     *      cn_20 都不含候选汉字，用它们候选条全是方框。给 IME 设字体会触发
+     *      LV_EVENT_STYLE_CHANGED，LVGL 内部据此把字体同步到候选条。
+     *   3) 候选条默认高 5%（480 屏只有 24 px），装不下 28 px 的汉字，需显式改尺寸。 */
+    s_ime = lv_ime_pinyin_create(s_kb_root);
+    lv_ime_pinyin_set_keyboard(s_ime, s_kb);
+    lv_obj_set_style_text_font(s_ime, pet_font(), 0);
+    lv_obj_t *cand = lv_ime_pinyin_get_cand_panel(s_ime);
+    lv_obj_set_size(cand, 760, 48);
+    lv_obj_align_to(cand, s_kb, LV_ALIGN_OUT_TOP_MID, 0, -6);
+    lv_obj_set_style_text_color(cand, COL_TEXT, 0);
+    lv_obj_set_style_text_font(cand, pet_font(), 0);
 
     /* ---- 事件队列 + 轮询 + 按键注册 ---- */
     s_evt_q = xQueueCreate(PET_EVT_Q_DEPTH, sizeof(pet_evt_msg_t));
@@ -1241,8 +1266,11 @@ void pet_overlay_deinit(void)
     xiaozhi_service_set_evt_cb(NULL);
     button_service_set_evt_cb(NULL);
     if (s_kb_root) {
-        lv_obj_del(s_kb_root);
+        lv_obj_del(s_kb_root);   /* 连带 s_kb / s_ime / 候选条一起删 */
         s_kb_root = NULL;
+        s_kb = NULL;
+        s_kb_ta = NULL;
+        s_ime = NULL;
     }
     if (s_win) {
         lv_obj_del(s_win);

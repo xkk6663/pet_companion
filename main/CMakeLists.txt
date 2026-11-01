@@ -31,6 +31,8 @@ idf_component_register(SRCS
                         "middleware/periph/sdcard_service.c"
                         "middleware/periph/led_service.c"
                         "middleware/periph/button_service.c"
+                        ## ---- 2026-11-01：编译期静态内部内存池（关键短任务栈不再吃堆）----
+                        "middleware/mem/static_pool.c"
                         ## ---- S8-1：人脸库（特征索引落盘；不依赖 esp-dl）----
                         "middleware/face_db/face_db.c"
                         "middleware/camera/camera_service.c"

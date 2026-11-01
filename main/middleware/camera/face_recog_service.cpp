@@ -62,12 +62,40 @@
  *   从外部判断它是否构建成功**（`detect_wrapper` 的 `m_model` 永远非空）。
  *   ⇒ 唯一的对策是**在构造之前把失败原因全部拦掉**（文件在位 + 内存够），
  *     这正是 `engine_mem_ok()` 存在的意义：**内存不够这一情况绝不能交给 esp-dl 去失败**。
+ *
+ * ★★ 第四个坑（2026-11-01 打卡崩溃的根因，**必读**）：PSRAM 栈任务里**碰 flash** 必崩。
+ *
+ *   本工程把两条任务（加载 / 推理）的栈挪到了 PSRAM（内部 RAM 实在凑不出 10 KB），
+ *   于是 `stat()` / `fopen()` / `fread()` 一旦在这些任务里执行，就会走到
+ *       esp_partition_read → esp_flash_read → spi_flash guard
+ *       → spi_flash_disable_interrupts_caches_and_other_cpu()
+ *   ⇒ 该函数里的断言 `esp_task_stack_is_sane_cache_disabled()`
+ *      （= `!esp_stack_ptr_in_extram(esp_cpu_get_sp()))` 直接 abort：
+ *       `assert failed: spi_flash_disable_interrupts_caches_and_other_cpu cache_utils.c:114`
+ *   真机证据（2026-11-01）：`starting recog load task (PSRAM)` 之后**一行 `[recogmem]`
+ *   都没打出来** ⇒ 崩在**第一个** flash 访问，也就是 `stat(RECOG_MFN_PATH)` 上。
+ *
+ *   ⚠ 本工程 `CONFIG_BSP_SD_MOUNT_POINT == "/littlefs"`（**不是 SD 卡**！），
+ *     `CONFIG_HUMAN_FACE_DETECT_MODEL_IN_SDCARD=y` ⇒ 三个 .espdl 全在 littlefs，
+ *     也就是说**读它们 = 读 flash**。旧注释里"FATFS 读不关 flash cache"的判据在这里不成立。
+ *
+ *   ⇒ 本文件的纪律（别再改回去）：
+ *     ① **所有** flash 访问（stat/open/read，含"文件多大"这种小事）必须在
+ *         `read_file_to_psram()` 里做 —— 它在一条**内部 RAM 栈**的临时任务上跑；
+ *     ② PSRAM 栈任务只做纯内存/计算工作：用 `read_file_to_psram()` 交回的
+ *        **PSRAM 缓冲**建模型（`MODEL_LOCATION_IN_FLASH_RODATA` 在这里等价于
+ *        "手工管理内存缓冲"，esp-dl 只警告 `fbs model is copied to PSRAM`，不读 flash）；
+ *     ③ 缓冲的寿命必须 ≥ 模型：`param_copy=false` 时模型权重直接指向该缓冲
+ *        （esp-dl 的 `auto_free=false`），所以**先 delete 模型，再 heap_caps_free(缓冲)**。
  */
 
 #include "face_recog_service.h"
 #include "mem_diag.h"                          /* mem_diag_snap()：加载前后的 PSRAM 现场 */
 
-#include "human_face_detect.hpp"               /* HumanFaceDetect (MSRMNP_S8_V1)      */
+#include "dl_detect_base.hpp"                  /* dl::detect::DetectImpl（MSR 用它跑） */
+#include "dl_detect_msr_postprocessor.hpp"     /* MSRPostprocessor                    */
+#include "dl_detect_mnp_postprocessor.hpp"     /* MNPPostprocessor                    */
+#include "dl_image_preprocessor.hpp"           /* dl::image::ImagePreprocessor        */
 
 #include "dl_feat_base.hpp"                    /* dl::feat::FeatImpl                  */
 #include "dl_feat_image_preprocessor.hpp"      /* dl::image::FeatImagePreprocessor    */
@@ -76,11 +104,14 @@
 #include "dl_image_define.hpp"                 /* dl::image::img_t / PIX_TYPE         */
 #include "dl_tensor_base.hpp"                  /* dl::TensorBase                      */
 
+#include "mem/static_pool.h"                   /* ★ 编译期静态内部池（recog_read 栈） */
+
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"                   /* 读文件工的互斥（防两个调用方互相覆盖工位） */
 #include "freertos/idf_additions.h"            /* xTaskCreatePinnedToCoreWithCaps / vTaskDeleteWithCaps */
 
 #include <stdio.h>
@@ -170,12 +201,21 @@ static const char RECOG_MFN_PATH[] =
  *  —— 内部 RAM 只剩 ~27 KB 且最大连续块 8704 B，10 KB 内部栈**凑不出来**，
  *  所以模型永远加载不了（打卡一直 state=0）。
  *  改为把栈放 PSRAM（`xTaskCreatePinnedToCoreWithCaps`），TCB 仍由内部 RAM 分配。
- *  F35 合规性：本文件两条任务**只读 SD 卡上的 .espdl 模型**（FATFS 读不关
- *  flash cache），不碰 NVS/littlefs/任何 flash 写 —— 与 ai_camera.c 的
- *  "SD FATFS 读写 ⇒ PSRAM 栈安全（F35 只禁 NVS/littlefs/flash IO）"同一判据。
+ *  ⚠ 改了 PSRAM 栈之后**本任务里一行 flash 访问都不许有**（stat/fopen/fread 全算）——
+ *    2026-11-01 的打卡崩溃就是这么来的，见文件头"第四个坑"。
+ *    flash 访问统一交给 `read_file_to_psram()`（内部 RAM 栈的临时任务）。
  *  任务用 PSRAM 栈后，自删必须用 `vTaskDeleteWithCaps(NULL)`，
  *  否则这条栈会用普通 free 回收（caps 不匹配）。 */
 #define RECOG_TASK_MEM_CAPS   (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+
+/** 读模型文件的**临时任务**栈（★ 必须内部 RAM）。
+ *  它只做 stat + fopen + fread 三件事，所以能吃下小栈：内部 RAM 在打卡会话里
+ *  只剩 ~7 KB（日志 `INT free=7259 largest=7168`），10240/8192 都凑不出来，
+ *  4096 是"能建起来 + 够 stdio/littlefs 调用深度"的折中（真机实测值）。
+ *  ★ 这条任务**不能**用 PSRAM 栈：它整个存在意义就是"在内部栈上碰 flash"。 */
+#define RECOG_READ_STACK   4096
+#define RECOG_READ_PRIO    RECOG_TASK_PRIO
+#define RECOG_READ_CORE    RECOG_TASK_CORE
 
 /* ---------------------------------------------------------------------------
  *  MFN —— 复刻官方 human_face_recognition::MFN（修正见文件头）
@@ -184,7 +224,8 @@ namespace {
 
 class MFN : public dl::feat::FeatImpl {
 public:
-    explicit MFN(const char *path)
+    /** @param buf  由 `read_file_to_psram()` 读进 PSRAM 的整份 .espdl（寿命 ≥ 本对象） */
+    explicit MFN(const uint8_t *buf)
     {
         /* ★ 见文件头"第二个坑"：三个基类成员此刻是垃圾值，先全部归零，
          *   否则构造失败时 ~FeatImpl() 会 delete 野指针。 */
@@ -194,8 +235,13 @@ public:
 
         /* ★★ 必须用**带参构造**：`Model()` 空构造不创建 m_model_context，
          *    而 load() 一进来就 `m_model_context->clear()` ⇒ 空指针 panic。
-         *    完整证据链（四条）见文件头"崩溃点 B"。 */
-        dl::Model *m = new dl::Model(path, fbs::MODEL_LOCATION_IN_SDCARD);
+         *    完整证据链（四条）见文件头"崩溃点 B"。
+         * ★ 这里传**内存缓冲**（不是路径）：`MODEL_LOCATION_IN_FLASH_RODATA` 对
+         *    esp-dl 的含义就是"直接拿这个指针当模型数据"，不做任何 flash IO；
+         *    指针若在 PSRAM，它会打一条 `fbs model is copied to PSRAM` 的 WARN
+         *    并置 `auto_free=false`（⇒ 缓冲由本文件管，见 engine_unload 的顺序）。 */
+        dl::Model *m = new dl::Model(reinterpret_cast<const char *>(buf),
+                                     fbs::MODEL_LOCATION_IN_FLASH_RODATA);
         if (m == nullptr) {
             return;
         }
@@ -210,9 +256,9 @@ public:
         if (m->get_fbs_model() == nullptr ||
             m->get_input()     == nullptr ||
             m->get_output()    == nullptr) {
-            ESP_LOGE(TAG, "MFN not built (fbs=%p in=%p out=%p) -> refuse minimize(), path=%s",
+            ESP_LOGE(TAG, "MFN not built (fbs=%p in=%p out=%p) -> refuse minimize()",
                      (void *)m->get_fbs_model(), (void *)m->get_input(),
-                     (void *)m->get_output(), path);
+                     (void *)m->get_output());
             delete m;
             return;
         }
@@ -231,6 +277,135 @@ public:
     bool ok() const
     {
         return m_model != nullptr && m_image_preprocessor != nullptr && m_postprocessor != nullptr;
+    }
+};
+
+/** 检测模型的"产物判据"（理由见文件头"崩溃点 A"）：
+ *  `dl::Model` 带参构造在 load 失败时**不会**把对象变空，只能看 build 的产物。 */
+inline bool model_built(dl::Model *m, const char *what)
+{
+    if (m != nullptr && m->get_fbs_model() != nullptr &&
+        m->get_input() != nullptr && m->get_output() != nullptr) {
+        return true;
+    }
+    ESP_LOGE(TAG, "%s not built (fbs=%p) -> refuse minimize()",
+             what, m ? (void *)m->get_fbs_model() : nullptr);
+    return false;
+}
+
+/* ---------------------------------------------------------------------------
+ *  MSR + MNP（检出 + 5 点）—— **复刻 vendor 组件的两个类，只把模型来源改成缓冲**
+ *
+ *  为什么要复刻而不是继续 `HumanFaceDetect(MSRMNP_S8_V1)`：
+ *  组件在 `CONFIG_HUMAN_FACE_DETECT_MODEL_IN_SDCARD=y` 下**内部自已 fopen**
+ *  （human_face_detect.cpp:22-24 / 43-45），而本工程那条路径落在 littlefs 上 ⇒
+ *  在 PSRAM 栈任务里必崩（文件头第四个坑）。组件是 managed_components（gitignore），
+ *  本地改会在重装组件时丢失 ⇒ 把这两个类搬到这里，模型从**内存缓冲**建。
+ *
+ *  ⚠ 数值参数（0.5/0.5、top_k=10、anchors）与 human_face_detect.cpp **逐字一致**，
+ *    换模型时必须以 vendor 组件的同版本为准；自己"顺手调"会让检出行为悄悄漂移。
+ * ------------------------------------------------------------------------- */
+class MsrBuf : public dl::detect::DetectImpl {
+public:
+    bool ok_ = false;
+
+    explicit MsrBuf(const uint8_t *buf)
+    {
+        /* ★ DetectImpl 三个成员同样是垃圾值，而 ~DetectImpl() 无条件 delete ⇒ 先归零。
+         *   （与 MFN 的"第二个坑"同一个理由。） */
+        m_model              = nullptr;
+        m_image_preprocessor = nullptr;
+        m_postprocessor      = nullptr;
+
+        dl::Model *m = new dl::Model(reinterpret_cast<const char *>(buf),
+                                     fbs::MODEL_LOCATION_IN_FLASH_RODATA);
+        if (!model_built(m, "MSR")) {
+            delete m;
+            return;
+        }
+        m->minimize();
+        m_model = m;
+        m_image_preprocessor = new dl::image::ImagePreprocessor(m_model, {0, 0, 0}, {1, 1, 1}, true);
+        m_postprocessor = new dl::detect::MSRPostprocessor(
+            m_model, m_image_preprocessor, 0.5f, 0.5f, 10,
+            {{8, 8, 9, 9, {{16, 16}, {32, 32}}}, {16, 16, 9, 9, {{64, 64}, {128, 128}}}});
+        ok_ = true;
+    }
+};
+
+/** MNP（5 点精修）：不是 Detect 的子类，run() 的写法照抄 human_face_detect.cpp:77-111 */
+class MnpBuf {
+public:
+    bool ok_ = false;
+    dl::Model                        *m_model = nullptr;
+    dl::image::ImagePreprocessor     *m_image_preprocessor = nullptr;
+    dl::detect::MNPPostprocessor     *m_postprocessor = nullptr;
+
+    explicit MnpBuf(const uint8_t *buf)
+    {
+        dl::Model *m = new dl::Model(reinterpret_cast<const char *>(buf),
+                                     fbs::MODEL_LOCATION_IN_FLASH_RODATA);
+        if (!model_built(m, "MNP")) {
+            delete m;
+            return;
+        }
+        m->minimize();
+        m_model = m;
+        m_image_preprocessor = new dl::image::ImagePreprocessor(m_model, {0, 0, 0}, {1, 1, 1}, true);
+        m_postprocessor = new dl::detect::MNPPostprocessor(
+            m_model, m_image_preprocessor, 0.5f, 0.5f, 10, {{1, 1, 0, 0, {{48, 48}}}});
+        ok_ = true;
+    }
+
+    ~MnpBuf()
+    {
+        delete m_model;
+        delete m_image_preprocessor;
+        delete m_postprocessor;
+    }
+
+    std::list<dl::detect::result_t> &run(const dl::image::img_t &img,
+                                         std::list<dl::detect::result_t> &candidates)
+    {
+        m_postprocessor->clear_result();
+        for (auto &candidate : candidates) {
+            int center_x = (candidate.box[0] + candidate.box[2]) >> 1;
+            int center_y = (candidate.box[1] + candidate.box[3]) >> 1;
+            int side = DL_MAX(candidate.box[2] - candidate.box[0],
+                              candidate.box[3] - candidate.box[1]);
+            candidate.box[0] = center_x - (side >> 1);
+            candidate.box[1] = center_y - (side >> 1);
+            candidate.box[2] = candidate.box[0] + side;
+            candidate.box[3] = candidate.box[1] + side;
+            candidate.limit_box(img.width, img.height);
+
+            m_image_preprocessor->preprocess(img, candidate.box);
+            m_model->run();
+            m_postprocessor->postprocess();
+        }
+        m_postprocessor->nms();
+        return m_postprocessor->get_result(img.width, img.height);
+    }
+};
+
+/** MSR → MNP 的组合（等价于 human_face_detect::MSRMNP::run），只从缓冲建。 */
+class DetBuf {
+public:
+    MsrBuf *msr = nullptr;
+    MnpBuf *mnp = nullptr;
+
+    ~DetBuf()
+    {
+        delete msr;
+        delete mnp;
+    }
+
+    bool ok() const { return msr != nullptr && msr->ok_ && mnp != nullptr && mnp->ok_; }
+
+    std::list<dl::detect::result_t> &run(const dl::image::img_t &img)
+    {
+        std::list<dl::detect::result_t> &candidates = msr->run(img);
+        return mnp->run(img, candidates);
     }
 };
 
@@ -280,8 +455,15 @@ void make_synthetic_face(uint8_t *buf, int w, int h)
 namespace {
 
 /* 三件套：MSR+MNP（检出 + 5 点）与 MFN（特征） */
-HumanFaceDetect *s_det = nullptr;
+DetBuf          *s_det = nullptr;
 MFN             *s_mfn = nullptr;
+
+/** 三个模型的内存缓冲（PSRAM）。**寿命 ≥ 对应模型**：
+ *  esp-dl 用 `param_copy=false` 时权重直接指向这里，所以卸载顺序必须是
+ *  "先 delete 模型 → 再 heap_caps_free 缓冲"（见 engine_unload）。 */
+uint8_t *s_msr_buf = nullptr;
+uint8_t *s_mnp_buf = nullptr;
+uint8_t *s_mfn_buf = nullptr;
 
 /** RGB888 帧缓冲（PSRAM）。**唯一的大缓冲**，由 submit() 在 LVGL 线程里填写。 */
 uint8_t *s_frame = nullptr;
@@ -324,12 +506,164 @@ const char RECOG_MSR_PATH[] =
 const char RECOG_MNP_PATH[] =
     CONFIG_BSP_SD_MOUNT_POINT "/" CONFIG_HUMAN_FACE_DETECT_MODEL_SDCARD_DIR "/" RECOG_MNP_FILE;
 
-/** 文件存在且非空？返回字节数，0 = 不存在/空 */
-size_t file_bytes(const char *path)
+/* ===========================================================================
+ *  模型文件读取 —— ★ **本文件唯一允许碰 flash 的地方**（文件头第四个坑）
+ * =========================================================================== */
+struct read_job_t {
+    const char  *path;
+    uint8_t     *buf;          /* 出参：PSRAM 缓冲（stat_only 时保持 nullptr） */
+    size_t       size;         /* 出参：文件字节数（0 = 不存在/空） */
+    esp_err_t    err;
+    bool         stat_only;    /* true：只 stat 拿尺寸，不分配、不读 */
+    TaskHandle_t waiter;
+};
+
+/** 当前工位（指向调用方栈上的 read_job_t）。worker 只在拿到通知后读它一次。 */
+static read_job_t *volatile s_read_job = nullptr;
+
+/** ★★ 常驻"内部栈读文件工"（**永不退出**，2026-11-01 第二版）。
+ *
+ *  ★ 为什么从"一次性任务"改成"常驻"（真机崩溃的根因，别再改回去）：
+ *    静态任务的栈/TCB 是调用方给的、**FreeRTOS 不会回收**。一次性任务
+ *    `vTaskDelete(NULL)` 之后仍挂在 `xTasksWaitingTermination` 上等 idle 清理，
+ *    而本调用点**紧接着就要读下一个文件**（MSR → MNP → MFN 是连续三次）。
+ *    第二次 create 复用同一个 `StaticTask_t` 时，前一个实例还没被清出链表
+ *    ⇒ `prvInitialiseNewTask` 覆写 `xStateListItem` ⇒ 链表被写坏
+ *    ⇒ idle 在 `prvCheckTasksWaitingTermination` 里 `uxListRemove` 崩
+ *    （实测：`Core 1 panic Load access fault`，MEPC = `list.c:207 uxListRemove`，
+ *      RA = `tasks.c:4598 prvCheckTasksWaitingTermination`）。
+ *  ⇒ 唯一安全的形态：**建一次、永不删、用任务通知交作业**。
+ *
+ *  这里**不能**把栈放 PSRAM —— 整个函数的存在意义就是"在内部栈上碰 flash"。
+ */
+void read_file_task(void *arg)
 {
-    struct stat st;
-    if (stat(path, &st) != 0 || st.st_size <= 0) return 0;
-    return (size_t)st.st_size;
+    (void)arg;
+
+    for (;;) {
+        /* 等工位：调用方先写好 s_read_job，再 xTaskNotifyGive */
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        read_job_t  *j      = s_read_job;
+        TaskHandle_t waiter = j->waiter;   /* ★ 先拷出来：收尾时不能再碰 j 的字段 */
+
+        struct stat st;
+        if (stat(j->path, &st) != 0 || st.st_size <= 0) {
+            j->err = ESP_ERR_NOT_FOUND;
+        } else {
+            j->size = (size_t)st.st_size;
+            if (j->stat_only) {
+                j->err = ESP_OK;
+            } else {
+                /* 64 B 对齐：esp-dl 的 `param_copy` 判据要求 16 B 对齐（fbs_loader.cpp:345），
+                 * 否则它会退化成"把权重再拷一份到 PSRAM"（多占一整份模型内存）。 */
+                j->buf = (uint8_t *)heap_caps_aligned_alloc(64, j->size,
+                                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                if (j->buf == nullptr) {
+                    j->err = ESP_ERR_NO_MEM;
+                } else {
+                    FILE *f = fopen(j->path, "rb");
+                    if (f == nullptr) {
+                        j->err = ESP_ERR_NOT_FOUND;
+                    } else {
+                        size_t rd = fread(j->buf, 1, j->size, f);
+                        fclose(f);
+                        /* 读少了 = 文件在 读的过程中被改，或 littlefs 出错 —— 两种都不能拿去建模型 */
+                        j->err = (rd == j->size) ? ESP_OK : ESP_FAIL;
+                    }
+                }
+                if (j->err != ESP_OK && j->buf != nullptr) {
+                    heap_caps_free(j->buf);
+                    j->buf = nullptr;
+                }
+            }
+        }
+
+        /* ★ 只通知、不再碰 j 的任何字段（j 在调用方栈上，那边收到通知就会返回）。 */
+        xTaskNotifyGive(waiter);
+    }
+}
+
+/**
+ * @brief 把**一个**模型文件读进 PSRAM 缓冲（或只量尺寸）。
+ * @param stat_only  true = 只要尺寸（`*out_buf` 保持 nullptr）
+ * @return true = 成功（stat_only 时表示文件存在且非空）
+ *
+ * ★ 2026-11-01 起栈来自**编译期静态池**（`static_pool.h`）：池块在 .bss 里预先划好，
+ *   所以"内部 RAM 只剩 ~7 KB、最大连续块 7 KB"时这条任务**仍然建得起来**。
+ *   调用者仍可以在 PSRAM 栈任务里调本函数 —— flash 访问都在内部栈的 read_file_task 里。
+ */
+bool read_file_to_psram(const char *path, bool stat_only, uint8_t **out_buf, size_t *out_size)
+{
+    /* ★ 栈来自**编译期静态池**（static_pool.h），不再向内部堆要 4 KB：
+     *   打卡会话里 `INT free=7259 largest=7168` 的时候，动态 4 KB 栈是"碰运气"，
+     *   而读模型是打卡的第一步 —— 这里失败就等于整个人脸功能不可用。
+     *   池块终生绑定 "recog_read"（只申请一次，之后每次加载复用），
+     *   所以反复加载/卸载模型不会产生任何内部堆分配/释放。
+     *   ★ TCB 也静态（FreeRTOS 静态任务要求调用方提供），两者都不会被回收
+     *     ⇒ 这条任务**只建一次、永不退出**（原因见 read_file_task 的头注释）。 */
+    static StackType_t      *s_read_stack  = nullptr;
+    static StaticTask_t      s_read_tcb;
+    static TaskHandle_t      s_read_worker = nullptr;
+    static SemaphoreHandle_t s_read_lock   = nullptr;
+
+    if (s_read_worker == nullptr) {
+        if (s_read_stack == nullptr) {
+            s_read_stack = (StackType_t *)static_pool_alloc(RECOG_READ_STACK, "recog_read");
+            if (s_read_stack == nullptr) {
+                ESP_LOGE(TAG, "static pool has no room for recog_read stack (%d B) | INT free=%u largest=%u",
+                         RECOG_READ_STACK,
+                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                return false;
+            }
+        }
+        if (s_read_lock == nullptr) {
+            s_read_lock = xSemaphoreCreateBinary();
+            if (s_read_lock == nullptr) {
+                ESP_LOGE(TAG, "xSemaphoreCreateBinary(recog_read) FAILED");
+                return false;
+            }
+            xSemaphoreGive(s_read_lock);       /* 初始为"空闲" */
+        }
+        s_read_worker = xTaskCreateStaticPinnedToCore(read_file_task, "recog_read",
+                                                      RECOG_READ_STACK, nullptr,
+                                                      RECOG_READ_PRIO, s_read_stack,
+                                                      &s_read_tcb, RECOG_READ_CORE);
+        if (s_read_worker == nullptr) {
+            ESP_LOGE(TAG, "xTaskCreateStatic(recog_read) FAILED");
+            return false;
+        }
+        ESP_LOGI(TAG, "reader worker up (resident, internal stack %d B)", RECOG_READ_STACK);
+    }
+
+    read_job_t job;
+    memset(&job, 0, sizeof(job));
+    job.path      = path;
+    job.stat_only = stat_only;
+    job.err       = ESP_FAIL;
+    job.waiter    = xTaskGetCurrentTaskHandle();
+    *out_buf  = nullptr;
+    *out_size = 0;
+
+    /* 串行化：两个调用方同时进来会互相覆盖工位（worker 只有一个 s_read_job）。 */
+    if (xSemaphoreTake(s_read_lock, portMAX_DELAY) != pdTRUE) {
+        return false;
+    }
+
+    s_read_job = &job;
+    xTaskNotifyGive(s_read_worker);
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   /* 读大文件要几百 ms，不能设超时 */
+    xSemaphoreGive(s_read_lock);
+
+    if (job.err != ESP_OK) {
+        ESP_LOGE(TAG, "read %s FAILED: %s (%u B)", path, esp_err_to_name(job.err),
+                 (unsigned)job.size);
+        return false;
+    }
+    *out_buf  = job.buf;
+    *out_size = job.size;
+    return true;
 }
 
 /** 留一份 PSRAM 块分布（只在异常/高危路径调，正常路径零开销）。
@@ -419,9 +753,14 @@ bool engine_mem_ok(size_t mfn_b, size_t msr_b, size_t mnp_b)
 /** 卸掉三件套 + 帧缓冲（幂等）。 */
 void engine_unload(void)
 {
-    /* ★ 顺序无关：MSRMNP 与 MFN 不共享任何东西。 */
+    /* ★★ 顺序**不是**无关的：esp-dl 在内存缓冲模式下是 `auto_free=false`，
+     *   模型的权重张量直接指向 s_*_buf ⇒ **必须先 delete 模型，再释放缓冲**，
+     *   反过来就是"模型还在指一块已 free 的 PSRAM"。 */
     if (s_det) { delete s_det; s_det = nullptr; }
     if (s_mfn) { delete s_mfn; s_mfn = nullptr; }
+    if (s_msr_buf) { heap_caps_free(s_msr_buf); s_msr_buf = nullptr; }
+    if (s_mnp_buf) { heap_caps_free(s_mnp_buf); s_mnp_buf = nullptr; }
+    if (s_mfn_buf) { heap_caps_free(s_mfn_buf); s_mfn_buf = nullptr; }
     if (s_frame) { heap_caps_free(s_frame); s_frame = nullptr; }
     s_frame_w = s_frame_h = 0;
 }
@@ -441,9 +780,17 @@ void engine_unload(void)
  */
 void engine_load(void)
 {
-    size_t mfn_b = file_bytes(RECOG_MFN_PATH);
-    size_t msr_b = file_bytes(RECOG_MSR_PATH);
-    size_t mnp_b = file_bytes(RECOG_MNP_PATH);
+    /* ---- ⓪ 尺寸（★ 用内部栈任务去 stat：本任务栈在 PSRAM，碰 flash 必崩） ---- */
+    size_t msr_b = 0, mnp_b = 0, mfn_b = 0;
+    uint8_t *tmp = nullptr;
+    if (!read_file_to_psram(RECOG_MSR_PATH, true, &tmp, &msr_b) |
+        !read_file_to_psram(RECOG_MNP_PATH, true, &tmp, &mnp_b) |
+        !read_file_to_psram(RECOG_MFN_PATH, true, &tmp, &mfn_b)) {
+        /* 三种失败都会在 read_file_to_psram 里各自打印原因（NOT_FOUND / 任务建不起来） */
+        s_state = FACE_FAIL;
+        ESP_LOGE(TAG, "model size probe failed -> recog unavailable");
+        return;
+    }
 
     /* ★★ 加载起点的现场（诊断）：这是"这次到底有没有机会跑起来"的原始数据。
      *   与后面 `recog engine ready ... | PSRAM free=.. largest=..` 配对，
@@ -493,23 +840,48 @@ void engine_load(void)
         }
     }
 
-    /* ---- ② MSR + MNP（5 点关键点）----
-     * ⚠ 这里**没有产物判据**可用（见文件头"第三个坑"）：文件与内存都已预先确认，
-     *   这才是安全的调用方式。 */
-    int64_t t1 = esp_timer_get_time();
-    s_det = new HumanFaceDetect(HumanFaceDetect::MSRMNP_S8_V1, false);
-    uint32_t msr_ms = (uint32_t)((esp_timer_get_time() - t1) / 1000);
-    if (!s_det) {
+    /* ---- ② 把三个模型整份读进 PSRAM（★ 真正的 flash IO 全在这一步里，见文件头第四个坑）----
+     * ★ 顺序：**先小后大**（MSR 211 KB → MNP 127 KB → MFN 1.29 MB），
+     *   让最大那笔从仍然完整的大块里一次拿走（§14.3 实测：MFN 装卸一次会让
+     *   PSRAM largest 从 4.25 MB 掉到 2.94 MB，能晚一点制造碎片就晚一点）。 */
+    int64_t tr = esp_timer_get_time();
+    if (!read_file_to_psram(RECOG_MSR_PATH, false, &s_msr_buf, &msr_b) ||
+        !read_file_to_psram(RECOG_MNP_PATH, false, &s_mnp_buf, &mnp_b) ||
+        !read_file_to_psram(RECOG_MFN_PATH, false, &s_mfn_buf, &mfn_b)) {
         s_state = FACE_FAIL;
-        ESP_LOGE(TAG, "MSRMNP construct FAILED");
-        dump_psram_blocks("MSRMNP construct failed");
+        ESP_LOGE(TAG, "model read FAILED (see above) | PSRAM free=%uKB largest=%uKB",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+                 (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
+        dump_psram_blocks("model read failed");
+        engine_unload();
+        return;
+    }
+    uint32_t read_ms = (uint32_t)((esp_timer_get_time() - tr) / 1000);
+
+    /* ---- ③ MSR + MNP（5 点关键点）---- */
+    int64_t t1 = esp_timer_get_time();
+    s_det = new DetBuf();
+    s_det->msr = new MsrBuf(s_msr_buf);
+    if (!s_det->msr->ok_) {
+        s_state = FACE_FAIL;
+        ESP_LOGE(TAG, "MSR construct FAILED");
+        dump_psram_blocks("MSR construct failed");
+        engine_unload();
+        return;
+    }
+    s_det->mnp = new MnpBuf(s_mnp_buf);
+    uint32_t msr_ms = (uint32_t)((esp_timer_get_time() - t1) / 1000);
+    if (!s_det->mnp->ok_) {
+        s_state = FACE_FAIL;
+        ESP_LOGE(TAG, "MNP construct FAILED");
+        dump_psram_blocks("MNP construct failed");
         engine_unload();
         return;
     }
 
-    /* ---- ③ MFN（特征）---- */
+    /* ---- ④ MFN（特征）---- */
     int64_t t2 = esp_timer_get_time();
-    s_mfn = new MFN(RECOG_MFN_PATH);
+    s_mfn = new MFN(s_mfn_buf);
     uint32_t mfn_ms = (uint32_t)((esp_timer_get_time() - t2) / 1000);
     if (!s_mfn || !s_mfn->ok()) {
         s_state = FACE_FAIL;
@@ -529,16 +901,16 @@ void engine_load(void)
      *   INT 那一栏尤其关键：`ModelContext::root_alloc()` 的 m_internal_root
      *   走 MALLOC_CAP_INTERNAL（内部堆），而本工程内部堆余量只有几十 KB。 */
     {
-        char who[80];
-        snprintf(who, sizeof(who), "took=%lldms msrmnp=%ums mfn=%ums",
+        char who[96];
+        snprintf(who, sizeof(who), "took=%lldms read=%ums msrmnp=%ums mfn=%ums",
                  (long long)((esp_timer_get_time() - t0) / 1000),
-                 (unsigned)msr_ms, (unsigned)mfn_ms);
+                 (unsigned)read_ms, (unsigned)msr_ms, (unsigned)mfn_ms);
         mem_diag_snap(TAG, "recogmem post", who);
     }
-    ESP_LOGI(TAG, "recog engine ready in %lld ms (msrmnp %u ms + mfn %u ms) | "
+    ESP_LOGI(TAG, "recog engine ready in %lld ms (read %u + msrmnp %u + mfn %u) | "
                   "feat_dim=%d | PSRAM free=%uKB largest=%uKB",
              (long long)((esp_timer_get_time() - t0) / 1000),
-             (unsigned)msr_ms, (unsigned)mfn_ms,
+             (unsigned)read_ms, (unsigned)msr_ms, (unsigned)mfn_ms,
              s_mfn->get_feat_len(),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
              (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
@@ -1116,8 +1488,22 @@ esp_err_t face_recog_probe(face_recog_probe_t *out)
     ESP_LOGI(TAG, "[OK-2/3] contiguous block sufficient");
 
     /* ---- ③ 加载 + 推理 ------------------------------------------------ */
+    /* ★ 与 engine_load() 同一纪律（文件头"第四个坑"）：模型必须从**PSRAM 缓冲**建，
+     *   构造里不许有任何 flash 访问。本探针任务虽然是内部栈（stat 安全），
+     *   但 MFN 的构造已改成只吃缓冲 ⇒ 这里同样先 read_file_to_psram() 再 new。 */
+    uint8_t *mfn_buf  = nullptr;
+    size_t   mfn_size = 0;
     int64_t t0 = esp_timer_get_time();
-    MFN *mfn = new MFN(RECOG_MFN_PATH);
+    if (!read_file_to_psram(RECOG_MFN_PATH, false, &mfn_buf, &mfn_size)) {
+        out->err = ESP_FAIL;
+        snprintf(out->note, sizeof(out->note), "read model to PSRAM failed: %s", RECOG_MFN_PATH);
+        ESP_LOGE(TAG, "[FAIL-3/3] %s", out->note);
+        return out->err;
+    }
+    ESP_LOGI(TAG, "model buffered: read %u B in %ums", (unsigned)mfn_size,
+             (unsigned)((esp_timer_get_time() - t0) / 1000));
+
+    MFN *mfn = new MFN(mfn_buf);
     out->load_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
 
     if (mfn == nullptr || !mfn->ok()) {
@@ -1126,7 +1512,8 @@ esp_err_t face_recog_probe(face_recog_probe_t *out)
                  "MFN load failed after %ums (see esp-dl log above)", (unsigned)out->load_ms);
         ESP_LOGE(TAG, "[FAIL-3/3] %s", out->note);
         ESP_LOGE(TAG, "  -> 若日志里是 'Failed to alloc' 则是内存；若是 fbs 解析错则是模型不兼容本芯片");
-        delete mfn;
+        delete mfn;                  /* ★ 先删模型（它的权重指向 mfn_buf） */
+        heap_caps_free(mfn_buf);
         out->psram_free_kb    = heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024;
         out->psram_largest_kb = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024;
         return out->err;
@@ -1141,6 +1528,7 @@ esp_err_t face_recog_probe(face_recog_probe_t *out)
         snprintf(out->note, sizeof(out->note), "model has no output tensor");
         ESP_LOGE(TAG, "%s", out->note);
         delete mfn;
+        heap_caps_free(mfn_buf);
         return out->err;
     }
     out->feat_len = o->get_size();
@@ -1155,6 +1543,7 @@ esp_err_t face_recog_probe(face_recog_probe_t *out)
                  RECOG_INPUT_W * RECOG_INPUT_H * 3);
         ESP_LOGE(TAG, "%s", out->note);
         delete mfn;
+        heap_caps_free(mfn_buf);
         return out->err;
     }
     make_synthetic_face(img_buf, RECOG_INPUT_W, RECOG_INPUT_H);
@@ -1206,6 +1595,7 @@ esp_err_t face_recog_probe(face_recog_probe_t *out)
     /* ---- 清理：连模型一起还回去，让这次自检**对后续功能零影响** -------- */
     heap_caps_free(img_buf);
     delete mfn;                      /* ~MFN → ~FeatImpl 依次 delete 三件套 */
+    heap_caps_free(mfn_buf);         /* ★ 顺序不能反：权重直接指向这块缓冲 */
 
     out->psram_free_kb    = heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024;
     out->psram_largest_kb = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024;

@@ -53,9 +53,10 @@ typedef void (*bt_audio_evt_cb_t)(bt_evt_t evt, const void *data, void *ctx);
 /** 初始化中间层（不打开射频，只建回调）。开机调用一次 */
 void bt_audio_service_init(bt_audio_evt_cb_t cb, void *ctx);
 
-/** 开机早期（LCD/WiFi/摄像头起来之前）调用一次：init+enable BT controller 并常驻。
- *  此时内部 RAM 最空，controller 的 HCI 内存池能一次性拿到连续块。
- *  之后 set_power 只开关 host（esp_bt_audio_init/deinit），不再碰 controller。
+/** init+enable BT controller（幂等）。**默认不再开机调用**（2026-11-01 起）：
+ *  controller 常驻会在 Core0 上压麦克风 AFE、并让 WiFi/BT coexist 一直生效，
+ *  实测会把云端 TTS 挤成卡顿；现在改为 `bt_audio_service_set_power(true)`
+ *  第一次打开蓝牙时才懒上电（PSRAM 优先分配，5.8 MB 连续块足够）。
  *  失败只打日志不 abort（蓝牙非必需功能）。 */
 void bt_audio_service_controller_init(void);
 
