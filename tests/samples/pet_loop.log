@@ -1,0 +1,19 @@
+I (1024) boot: app_main start
+I (1180) AI_ACT: ready (queue 8, stack 7168 internal)
+I (1266) AI_ACT: mcp engine ready (protocol 2025-03-26)
+I (1310) WIFI: sta got ip 192.168.10.23
+I (1452) AI_ACT: caps -> ESP_OK (8120 B, 16 tools, 15 from mcp engine)
+I (1508) EVT: rx <- system
+I (1512) EVT: rx <- emotion
+I (9010) EVT: action 'punch' -> ESP_OK
+I (9014) AI_ACT: accept 'punch' id=1 args={}
+I (9550) AI_ACT: result punch id=1 ok=1 -> ESP_OK (「张三」打卡成功，照片已存)
+I (9556) AI_ACT: stack left 6120 B after 'punch'
+I (9630) EVT: rx <- text
+I (9640) EVT: rx <- emotion
+I (10220) EVT: action 'music' -> ESP_OK
+I (10224) AI_ACT: accept 'music' id=2 args={"__text":"放首晴天","name":"晴天"}
+I (11800) AI_ACT: result music id=2 ok=1 -> ESP_OK (晴天)
+I (11806) AI_ACT: stack left 5048 B after 'music'
+I (12001) EVT: rx <- error
+I (12400) AI_ACT: caps -> ESP_OK (8120 B, 16 tools, 15 from mcp engine)
