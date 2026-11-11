@@ -465,7 +465,19 @@ static void chat_say_stream(const char *text)
     if (bub == NULL) {
         return;
     }
-    snprintf(s_typing_full, sizeof(s_typing_full), "%s", text);
+    /* ★ 有界拷贝，不用 snprintf("%s")：源串长度编译期未知，且此处上限
+     *   （PET_TEXT_MAX+32，见 evt_drain 的 clean）本来就比目标大，
+     *   -Wformat-truncation 会直接判死（本工程 -Werror）。截断点回退到
+     *   UTF-8 字符边界，别把最后一个汉字劈成半个（会渲染成乱码）。 */
+    size_t tl = strlen(text);
+    if (tl >= sizeof(s_typing_full)) {
+        tl = sizeof(s_typing_full) - 1;
+        while (tl > 0 && ((unsigned char)text[tl] & 0xC0) == 0x80) {
+            tl--;
+        }
+    }
+    memcpy(s_typing_full, text, tl);
+    s_typing_full[tl] = '\0';
     s_typing_pos = 0;
     s_typing_bub = bub;
     s_typing_lb = lv_obj_get_child(bub, 0);
@@ -660,16 +672,32 @@ static void preview_poll(void)
 static void evt_drain(void)
 {
     pet_evt_msg_t m;
+    /* ★★ 云端文本在进 LVGL 之前先过一遍 ui_binfont_text_fit()：
+     *   bin 字表实测 11 段 / 32,955 字形（ui_binfont.h，§25）。**缺的是**
+     *   Emoji、○●■▽★☆♪♫♥♡、→←、变体选择符 U+FE0F 等符号；
+     *   中文 / 假名 / 韩文 / “”‘’——… ·×÷° 都**有字形，原样保留**
+     *   （§22.5 曾按"只有四段"的错误前提把它们降级成 ASCII，§25 已撤回）。
+     *   表外码点原样丢给 lv_label 会表现为"句子里凭空少几个字"，
+     *   所以命中映射表的换成等价 ASCII 颜文字，其余丢弃。
+     *   +32 B 余量：替换串可能比原码点长（✅ → "[OK]"）。
+     *   只在 LVGL 线程用，栈上一次性 632 B（任务栈 9728，实测 hwm 富余）。 */
+    char clean[PET_TEXT_MAX + 32];
+
     while (s_evt_q && xQueueReceive(s_evt_q, &m, 0) == pdPASS) {
+        const char *txt = m.text;
+        if (txt != NULL) {
+            ui_binfont_text_fit(m.text, clean, sizeof(clean));
+            txt = clean;
+        }
         switch ((xiaozhi_evt_id_t)m.id) {
         case XZ_EVT_TEXT:
             if (m.role == 0) {
                 /* 语音识别结果（云端回吐的"你说的"）——右侧我的气泡 */
                 chat_think_end();
-                chat_add(MSG_ME, m.text, false);
+                chat_add(MSG_ME, txt, false);
             } else {
                 /* 大肥鱼的回答：逐字吐，观感是流式 */
-                chat_say_stream(m.text);
+                chat_say_stream(txt);
             }
             break;
         case XZ_EVT_EMOJI:
@@ -684,10 +712,10 @@ static void evt_drain(void)
             }
             break;
         case XZ_EVT_ERROR:
-            if (m.text && m.text[0]) {
+            if (txt && txt[0]) {
                 /* ★ 错误必须进对话流：只写后台日志的话，用户看到的就是"按了没反应" */
                 chat_think_end();
-                chat_sys(m.text);
+                chat_sys(txt);
             }
             break;
         case XZ_EVT_LINK:
@@ -1214,12 +1242,48 @@ void pet_overlay_init(void)
      *   3) 候选条默认高 5%（480 屏只有 24 px），装不下 28 px 的汉字，需显式改尺寸。 */
     s_ime = lv_ime_pinyin_create(s_kb_root);
     lv_ime_pinyin_set_keyboard(s_ime, s_kb);
+    /* ★ 2026-11-11 简体候选：LVGL 自带的 lv_ime_pinyin_def_dict 是繁体字表
+     *   （"shuo"→数説說、"men"→們、"zhe"→者這），候选出来全是繁体。
+     *   这里换成由它逐串 t2s 转好的简体表（保留原频率排序）。
+     *   注意：set_dict 只存指针不拷贝，数组必须是静态只读且活到 UI 销毁之后。 */
+    {
+        extern const lv_pinyin_dict_t g_pinyin_dict_simp[];
+        lv_ime_pinyin_set_dict(s_ime, (lv_pinyin_dict_t *)g_pinyin_dict_simp);
+    }
     lv_obj_set_style_text_font(s_ime, pet_font(), 0);
     lv_obj_t *cand = lv_ime_pinyin_get_cand_panel(s_ime);
     lv_obj_set_size(cand, 760, 48);
     lv_obj_align_to(cand, s_kb, LV_ALIGN_OUT_TOP_MID, 0, -6);
-    lv_obj_set_style_text_color(cand, COL_TEXT, 0);
     lv_obj_set_style_text_font(cand, pet_font(), 0);
+    /* ★★ 候选字颜色必须设在 **LV_PART_ITEMS**，设在 part 0 上等于没设
+     *   （用户报的"候选文字黑色的看不清"就是这一条）：
+     *   候选条本体是 `lv_buttonmatrix`，它在
+     *   `lv_buttonmatrix.c:671/749` 用
+     *   `lv_obj_init_draw_label_dsc(obj, LV_PART_ITEMS, ...)` 取字色；
+     *   而 `lv_obj_get_style_prop_internal()`（lv_obj_style.c:1544）的查找顺序是
+     *   「ITEMS → （仅当 ITEMS 没设这个 **inheritable** 属性时才回退）MAIN → 父链」。
+     *   本工程**没开** `CONFIG_LV_THEME_DEFAULT_DARK` ⇒ 默认浅色主题给
+     *   buttonmatrix 的 LV_PART_ITEMS 挂了 `styles.btn`，其 text_color =
+     *   `theme->color_text`（近黑，lv_theme_default.c:291）⇒ 命中即止，
+     *   永远轮不到我们写在 MAIN 上的 COL_TEXT。
+     *   （对照：字体能生效是因为 btn 样式**没设** text_font，才回退到 MAIN。）
+     *   同时 IME 源码把候选条 MAIN/ITEMS 的 bg_opa 都置 0（透明），透出的是
+     *   COL_BG 深蓝底 ⇒ 近黑字 + 深蓝底 = 看不见。这里一并补上底色。 */
+    lv_obj_set_style_bg_color(cand, COL_CARD, 0);
+    lv_obj_set_style_bg_opa(cand, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(cand, 10, 0);
+    lv_obj_set_style_border_width(cand, 0, 0);
+
+    lv_obj_set_style_text_color(cand, COL_TEXT, LV_PART_ITEMS);
+    /* 选中项：青底 + 深字。buttonmatrix 逐项绘制时会临时把 obj->state 设成
+     * 该项的状态（lv_buttonmatrix.c:744），所以这里的 CHECKED 选择器是**按下标**
+     * 生效的，不是整条候选条一起变。 */
+    lv_obj_set_style_bg_color(cand, COL_CYAN, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_opa(cand, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(cand, COL_DARK, LV_PART_ITEMS | LV_STATE_CHECKED);
+    /* 按下瞬间的同色反馈（否则按下时只剩主题的浅色 pressed 样式，会"闪白"） */
+    lv_obj_set_style_bg_color(cand, COL_BORDER, LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(cand, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_PRESSED);
 
     /* ---- 事件队列 + 轮询 + 按键注册 ---- */
     s_evt_q = xQueueCreate(PET_EVT_Q_DEPTH, sizeof(pet_evt_msg_t));

@@ -203,6 +203,15 @@ CONFIG_CAMERA_OV3660_DVP_YUV422_YUYV_640X480_10FPS=n
 ##    ★ 日志已证实：WIFI_PS_NONE 早就设了也没用 —— 因为它不是省电问题，是缓冲只有 2 个。
 ##    代价：16 x 1.6 KB = 25.6 KB，走 PSRAM（TRY_ALLOCATE_WIFI_LWIP=y）⇒ 不占内部 RAM。
 CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
+
+## ①b AMPDU RX BA 窗口（§30，2026-11-11）：2 → 16
+##    IDF v6.1 `esp_wifi/Kconfig:204-205` 原文：`SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` 时
+##    default 就是 **16**，且 help 写明「PSRAM 优先分配时，default **和最小值**都应是 16」。
+##    本工程长期为 **2**（range 下限，与 ① 同源的陈旧遗留值）⇒ 聚合窗口只有 2 帧。
+##    现场证据：本机 PC 从云端网关拉同一个 TTS 文件 142 KB/s，设备侧等效只有 24.7 KB/s；
+##    TTS 源码率 48 KB/s ⇒ 供给不足 ⇒ 边下边播每 0.3 s 见底一次（§26.1 / §30）。
+##    代价：BA 窗口只决定在途帧数，RX 缓冲本身走 PSRAM（见 ①），不动内部 RAM。
+CONFIG_ESP_WIFI_RX_BA_WIN=16
 ## ② PHY 校准数据落 NVS：关联/重连窗口内那几次 94~157 ms 关中断的**嫌疑之一**
 ##    （flash 擦写 → spi_flash_disable_interrupts_caches_and_other_cpu）。已排除的两个写点：
 ##    `esp_wifi_set_config()`（已改 WIFI_STORAGE_RAM）与 `save_connected_cred()`
@@ -323,3 +332,39 @@ CONFIG_AUDIO_SIMPLE_PLAYER_CH_CVT_DEST=2
 # 实机现象：启动即 Guru Meditation (Cache error) @ spi_flash_chip_generic_read
 #   ← esp_littlefs mount 读 superblock，无限重启循环。
 CONFIG_LITTLEFS_MALLOC_STRATEGY_INTERNAL=y
+
+## ---------------------------------------------------------------------------
+## ★ 双麦 BSS（main/Kconfig.projbuild，2026-11-11 §33/§34）
+##   上机五态对照已结案：本板是两只独立麦，右路（ADC2）极性反相。
+##   ⇒ 默认 BSS（双麦盲源分离）+ 软件固化右路取负。
+##   ⚠ 必须与顶层 sdkconfig 同值（sdkconfig 生效，这里只在清库重建时兜底）。
+## ---------------------------------------------------------------------------
+CONFIG_MIC_FE_MODE_SEL_BSS=y
+CONFIG_MIC_FE_ADC_PROBE_SEL_AUTO=y
+CONFIG_MIC_FE_INVERT_R=y
+## P4 硬件级对照实验（0x23.bit4 副本 / 0x25.bit5 翻极性 / 0x20 单路静音）
+## ★ 已结案：交付固件全部保持关闭；只在重做硬件对照时用 menuconfig 临时打开。
+# CONFIG_MIC_FE_PROBE_ADC2_FROM_ADC1 is not set
+# CONFIG_MIC_FE_PROBE_HW_INVERT_R is not set
+# CONFIG_MIC_FE_PROBE_MUTE_ADC2 is not set
+# CONFIG_MIC_FE_PROBE_MUTE_ADC1 is not set
+## 运行时切换（长按 SET 循环切 5 个探针态）。交付固件必须关：
+## 打开后会占用 SET 长按，且误触会改 ADC 寄存器。
+# CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH is not set
+
+## ---------------------------------------------------------------------------
+## ★★ 采样率契约 / 慢放铁律（§73.27 补充 4、补充 7；改动记录 §29）
+##   网关 TTS = 24000 Hz WAV；ASP 必须 rate_cvt(→16000) + ch_cvt(→2ch)
+##   归一到 play_io(16000/2ch)，与 mixer 流声明三方一致才不慢放。
+##   下面四项是 2026-10-01 用户拍板的 16k/2ch 静态锚点，禁止随意改：
+##     RESAMPLE_EN=y / RESAMPLE_DEST_RATE=16000
+##     CH_CVT_EN=y  / CH_CVT_DEST=2
+##   ★ 关闭 RESAMPLE_EN 前必须先让网关把 TTS 输出改成 16000/2ch，
+##     否则 24k 原始 PCM 直接塞进 16k 声明 ⇒ 复现「数据格式≠流声明」慢放。
+##   实际赋值见本文件上方「ASP 输出格式对齐 play_io」段（只保留一处，
+##   避免 defaults 重复项）；本段只作铁律说明。
+## ---------------------------------------------------------------------------
+
+## §29：本地音乐 gmf pool 的 rate_cvt 诊断开关（main/Kconfig.projbuild）
+##   默认 y；设 n 仅用于 A/B 定位 task_wdt，非 44100 源会建链失败。
+CONFIG_PET_MP_RATE_CVT_ENABLE=y

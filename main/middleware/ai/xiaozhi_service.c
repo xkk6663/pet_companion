@@ -38,6 +38,8 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"            /* esp_timer_get_time：写 I2S 耗时打点 */
+#include "esp_wifi.h"             /* 链路诊断：uplink 水位里带 RSSI/信道 */
 #include "middleware/mem_diag.h"
 
 #include "audio_processor.h"        /* av_processor: audio_manager/recorder/playback */
@@ -58,14 +60,16 @@
 #include "middleware/audio/media_player_service.h"  /* 反向抢占：起会话前停歌 */
 #include "middleware/periph/safe_reboot.h"
 #include "audio_service.h"
+#include "middleware/audio/mic_frontend.h"
 
 static const char *TAG = "PET_SVC";
 
-/* ---- 采集/播放格式（与改造前完全一致，别再动：I2S 时钟共享的连锁约束）----
- * play_io 16k/2ch 是**下行锚点**（简单播放器统一转成它），rec 声明 16k/1ch
- * 但物理 RX 是 2ch（同一 I2S 控制器 TX 立体声陪跑）⇒ read_cb 取 L 通道。 */
-#define XZ_MIC_LAYOUT       "MM"
-#define XZ_BOARD_CHANNELS   1
+/* ---- 采集/播放格式（下行锚点别再动：I2S 时钟共享的连锁约束）----
+ * play_io 16k/2ch 是**下行锚点**（简单播放器统一转成它）。
+ * ★ 2026-11-10 双麦前端：rec 的声道数与 AFE 输入布局不再写死，
+ *   由 mic_frontend 决定（BSS ⇒ 2ch/"MM"，GSC ⇒ 1ch/"M"）。
+ *   原先是 rec 声明 1ch + 布局 "MM" + read_cb 只取 L —— 三处互相矛盾，
+ *   等于把双麦阵列在软件层砍成单麦。详见 audio/mic_frontend.h 文件头。 */
 #define XZ_SAMPLE_RATE      16000
 #define XZ_BITS             16
 #define XZ_FRAME_MS         60
@@ -78,6 +82,70 @@ static const char *TAG = "PET_SVC";
 /* 下行播放优先级（只剩一路，保留数值只为日志可读） */
 #define XZ_TTS_PRIORITY     2
 #define XZ_MUSIC_PRIORITY   1
+
+/* ★★ 2026-11-10 播放任务优先级（"云端对话时 TTS 一帧一帧、本地 MP3 不卡"）
+ *
+ * 事实：TTS 与本地 MP3 走两条完全不同的链路 ——
+ *   TTS  = av_processor/esp_audio_simple_player（本文件的 s_play/s_music_h，
+ *          HTTP 拉 /static/tts_*.wav + 解码 + 写 I2S，全在**一个** asp 任务里串行）
+ *   MP3  = media_player_service 的 esp_player/GMF 管线（另一套任务，会话外才跑）
+ * ⇒ "只有对话时卡"说明问题不在解码器，而在**会话期多出来的任务抢 CPU**。
+ *
+ * 会话期 core 1 上的现役优先级（实测配置，非推测）：
+ *   recorder_task 10（`recorder_task_config`，xiaozhi 覆写 core 1）
+ *   WS 收包        8（`WS_TASK_PRIO`，无亲和）
+ *   AFE feed/fetch 5 / 5（`afe_*_task_config` 默认；fetch 固定 core 1）
+ *   pet_uplink     5（无亲和）
+ *   播放任务       4 ← **全场垫底**，却要独自完成 拉流+解码+重采样+写 I2S
+ * 一旦播放任务每轮被抢走几十毫秒，I2S TX DMA 就欠载 → 声音断成一片一片。
+ * 提到 7：压过 AFE/uplink(5) 与 cmedia(4)，仍让 WS(8)/recorder(10) 先走
+ * （收包和取数不能拖，它们的单次占用都在毫秒级）。
+ *
+ * ★★ 2026-11-10 二轮实测**订正上面那段归因**（prio 7 已生效但仍卡）：
+ *   实机 `play tts PLAYING (play task prio 7, core 1)` 且
+ *   `tts stat: stalls=16~30 maxgap=824/1200/1441/1842ms`，
+ *   段 2 墙钟 18.0 s 只送出 9.27 s 音频 —— 一半时间在空等数据。
+ *   CPU 抢占只会造成几十毫秒的空窗，**秒级 gap 只能是上游供给断流**：
+ *   TTS 是 esp_audio_simple_player 通过 io_http **边下边播**，
+ *   ringbuffer 默认 20 KB ≈ 0.3 s，网络/图片下载/日志一抖，I2S 立刻欠载。
+ *   ⇒ 播放任务优先级**不能再往上提**：`HTTP_STREAM_TASK_PRIO = 10`
+ *     （esp_gmf_io_http.h）是生产者，把消费者提到 >10 会饿死拉流任务，更卡。
+ *   真正的修法是把抖动挡在 I2S 之前：ringbuffer 20 KB → 128 KB（§26）。
+ *   其余干扰源：云端「先图片后 TTS」使图片下载/解码与起播重叠（§26）。
+ *
+ * ★★ 2026-11-11 §35 订正上面「会话期 core1 现役优先级」那张表：
+ *   那张表是**改动前快照**，其中 `recorder_task 10` 已被本轮改为
+ *   `6 / core0`，AFE feed/fetch/uplink 也一并下沉 core0（见下方
+ *   XZ_REC_TASK_* 宏）。另有一条当初漏记的事实：`io_http` 拉流由
+ *   `HTTP_STREAM_CFG_DEFAULT()` 固定 **core0 / prio10**，不在 core1；
+ *   所以「播放/拉流都在 core1」的说法不成立，隔离靠的是「拉流 10 最高
+ *   + 录音侧全部 ≤6 + 播放独占 core1」，不是靠把拉流挪核。 */
+#define XZ_PLAY_TASK_PRIO   7
+#define XZ_PLAY_TASK_CORE   1
+/* 音乐通道让位者：比 TTS 低，但仍要压过 AFE 空转，否则点歌同样会卡 */
+#define XZ_MUSIC_TASK_PRIO  5
+
+/* ★★ 2026-11-11 §35：录音链路整条下沉 core0，core1 只留播放消费端。
+ *
+ * 起因：切双麦 BSS 后 TTS「播几秒停一下」。§26 的实测结论是
+ *   「CPU 抢占只造几十毫秒空窗，秒级 gap 只能是上游供给断流」，
+ *   而拉流生产者 `HTTP_STREAM_TASK_PRIO=10`（esp_gmf_io_http.h:18）
+ *   与工程覆写的 `recorder_task prio=10` **平级争抢** ⇒ BSS 变重后
+ *   拉流被拖，官方 20 KB ringbuffer（≈0.32 s 音频，§29 撤销 128 KB
+ *   补丁后的基线）一抖就见底。
+ *
+ * 布局（★ 拉流 io_http 是托管组件 `HTTP_STREAM_CFG_DEFAULT()` 固定
+ *   **core0 / prio10**，不能改核，只能靠优先级隔离）：
+ *     core0 : io_http 拉流 10  >  recorder 6  >  AFE feed/fetch 5  >  uplink 5
+ *     core1 : 播放 work task 7（独占；GMF 解码/重采样/写 I2S 都串在它里面）
+ *   ⇒ 播放与录音物理分核；拉流仍是 core0 最高优先级，不会被 BSS 拖住。
+ *
+ * ★ recorder 取 6 而不是更低：它要高于 AFE feed/fetch(5)，
+ *   否则 GMF 管线内部调度被饿，会重现 `AFE: Ringbuffer of AFE is empty`。
+ * ★ 不动 afe_config 的算法/内存，也不动托管组件；改 Kconfig 无关，
+ *   纯 C 常量 ⇒ 只需 build，不必 reconfigure。 */
+#define XZ_REC_TASK_CORE    0
+#define XZ_REC_TASK_PRIO    6
 
 /* 播放 URL 常驻缓冲（av_processor 内部仍引用字符串，必须收编） */
 #define XZ_URL_MAX          512
@@ -123,7 +191,6 @@ static volatile bool s_ptt_on;       /* 上行任务已对齐态 */
 static volatile bool s_uplink_sending;   /* 上行任务正在发大帧（teardown 用） */
 
 static uint8_t      *s_uplink_buf;   /* PSRAM 读缓冲 */
-static int16_t      *s_rec_scratch;  /* PSRAM 取 L 通道暂存 */
 
 static audio_recorder_handle_t s_recorder;
 static audio_play_handle_t     s_play;      /* 通道①：TTS（priority 2） */
@@ -191,28 +258,89 @@ static void set_state(xiaozhi_state_t st)
  * av_processor 设备 IO（与改造前逐字一致）
  * ============================================================ */
 
+/* ★ 2026-11-10 播放供给打点（"TTS 卡成一帧一帧"的定量判据）
+ *   现象只在云端对话时出现、本地 MP3 流畅 ⇒ 差异在"会话期多出来的任务"
+ *   与"播放任务优先级"，必须用数据区分下面三种成因：
+ *     (a) 供给抖断：播放任务被高优任务抢走 / 解码慢 / HTTP 断流
+ *         ⇒ stall 次数多、maxgap 大（远超块时长）
+ *     (b) 输出被跳过：audio_policy 判定非 winner，cb 根本没被调
+ *         ⇒ writes/bytes 远少于"应播时长 × 64000 B/s"
+ *     (c) I2S 硬件层（全双工 TX 欠载）：写入密、间隔正常但声音仍断
+ *   块时长按 play_io 16k/2ch/16bit = 64000 B/s 换算。 */
+static uint32_t   s_pw_writes;
+static uint32_t   s_pw_bytes;
+static uint32_t   s_pw_stall;       /* 间隔 > 块时长 + 30ms 的次数 */
+static uint32_t   s_pw_maxgap_ms;
+static TickType_t s_pw_last;
+/* ★ 2026-11-10 二轮：把「两次回调之间的间隔」拆成「间隔」与「写 codec 自身耗时」。
+ *   maxgap 大到 0.8~1.8 s 时，必须能区分：
+ *     写 codec 慢 ⇒ I2S 全双工 / DMA 层（对话时 mic 与 spk 同时 open）
+ *     写 codec 快、间隔大 ⇒ 上游断供（HTTP 边下边播 / 解码 / 任务调度）
+ *   否则只能继续猜。tick 分辨率不够（10 ms），用 esp_timer 微秒计时。 */
+static uint32_t   s_pw_wr_max_ms;
+static uint32_t   s_pw_wr_slow;     /* esp_codec_dev_write 自身 > 30ms 的次数 */
+
+static void xz_play_stat_reset(void)
+{
+    s_pw_writes = 0;
+    s_pw_bytes = 0;
+    s_pw_stall = 0;
+    s_pw_maxgap_ms = 0;
+    s_pw_last = 0;
+    s_pw_wr_max_ms = 0;
+    s_pw_wr_slow = 0;
+}
+
 static esp_err_t xz_play_write_cb(uint8_t *data, int size, void *ctx)
 {
     (void)ctx;
     if (s_spk == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
-    return (esp_codec_dev_write(s_spk, data, size) >= 0) ? ESP_OK : ESP_FAIL;
+    TickType_t now = xTaskGetTickCount();
+    uint32_t blk_ms = (uint32_t)size * 1000u /
+                      (XZ_PLAY_RATE * XZ_PLAY_CHANNELS * (XZ_BITS / 8));
+    if (s_pw_last != 0) {
+        uint32_t gap = (uint32_t)(now - s_pw_last) * portTICK_PERIOD_MS;
+        if (gap > blk_ms + 30) {
+            s_pw_stall++;
+            if (gap > s_pw_maxgap_ms) {
+                s_pw_maxgap_ms = gap;
+            }
+        }
+    }
+    s_pw_last = now;
+    s_pw_writes++;
+    s_pw_bytes += (uint32_t)size;
+
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t ret = (esp_codec_dev_write(s_spk, data, size) >= 0) ? ESP_OK : ESP_FAIL;
+    uint32_t wr_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+    if (wr_ms > 30) {
+        s_pw_wr_slow++;
+    }
+    if (wr_ms > s_pw_wr_max_ms) {
+        s_pw_wr_max_ms = wr_ms;
+    }
+    return ret;
 }
 
-#define XZ_REC_CHUNK_SAMPLES  2048
-#define XZ_REC_SCRATCH_BYTES  (XZ_REC_CHUNK_SAMPLES * XZ_PLAY_CHANNELS * (XZ_BITS / 8))
 static TickType_t s_rec_last_tick;
 static uint32_t   s_rec_xrun_risk;
 
+/* 上行采集回调（AFE feed 任务上下文）
+ * ★ 双麦：这里不再自己解交织 / 丢 R，交给 mic_frontend 决定
+ *   —— BSS 模式返回 2ch 交错，GSC 模式返回波束后的 1ch。 */
 static esp_err_t xz_rec_read_cb(uint8_t *data, int size, void *ctx)
 {
     (void)ctx;
-    if (s_mic == NULL || s_rec_scratch == NULL) {
+    if (s_mic == NULL) {
         return ESP_ERR_INVALID_STATE;
     }
     TickType_t now = xTaskGetTickCount();
-    int block_ms = (size >> 1) * 1000 / XZ_SAMPLE_RATE;
+    int ch = mic_fe_out_channels();
+    int frames = size / (ch * (XZ_BITS / 8));
+    int block_ms = frames * 1000 / XZ_SAMPLE_RATE;
     if (s_rec_last_tick != 0 &&
         (now - s_rec_last_tick) > pdMS_TO_TICKS(block_ms + 15)) {
         s_rec_xrun_risk++;
@@ -221,25 +349,7 @@ static esp_err_t xz_rec_read_cb(uint8_t *data, int size, void *ctx)
                  block_ms + 15, (unsigned)s_rec_xrun_risk);
     }
     s_rec_last_tick = now;
-    int out_total = size >> 1;
-    int done = 0;
-    while (done < out_total) {
-        int chunk = out_total - done;
-        if (chunk > XZ_REC_CHUNK_SAMPLES) {
-            chunk = XZ_REC_CHUNK_SAMPLES;
-        }
-        int rd = esp_codec_dev_read(s_mic, s_rec_scratch,
-                                    chunk * XZ_PLAY_CHANNELS * (XZ_BITS / 8));
-        if (rd < 0) {
-            return ESP_FAIL;
-        }
-        int16_t *out = (int16_t *)data + done;
-        for (int i = 0; i < chunk; i++) {
-            out[i] = s_rec_scratch[i * XZ_PLAY_CHANNELS];   /* L = mic0 */
-        }
-        done += chunk;
-    }
-    return ESP_OK;
+    return mic_fe_read(data, size, s_mic);
 }
 
 /* ============================================================
@@ -268,7 +378,12 @@ static void xz_tts_event_cb(audio_play_state_t state, void *ctx)
     case AUDIO_PLAY_STATE_PLAYING:
         s_tts_active = true;
         s_last_act = xTaskGetTickCount();
-        ESP_LOGI(TAG, "play tts PLAYING");
+        xz_play_stat_reset();
+        /* TTS 期间麦克风收到的是喇叭回声：停掉 MIC 诊断（统计 + 5s 日志），
+         * 不与下行播放争 PSRAM / UART 日志锁。只影响诊断，不影响采集。 */
+        mic_fe_set_diag_hold(true);
+        ESP_LOGI(TAG, "play tts PLAYING (play task prio %d, core %d)",
+                 XZ_PLAY_TASK_PRIO, XZ_PLAY_TASK_CORE);
         notify(XZ_EVT_TTS_STATE, NULL, 1, ESP_OK);          /* role=1 start */
         break;
     case AUDIO_PLAY_STATE_FINISHED:
@@ -278,6 +393,16 @@ static void xz_tts_event_cb(audio_play_state_t state, void *ctx)
         bool fin = (state == AUDIO_PLAY_STATE_FINISHED);
         s_tts_active = false;
         s_last_act = xTaskGetTickCount();
+        mic_fe_set_diag_hold(false);
+        /* 供给质量：bytes/64000 = 实际送入 codec 的音频秒数。
+         * stalls 多 ⇒ 抖断（调度/网络）；bytes 明显小于实际播放秒数 ⇒ 被 policy 跳过。 */
+        ESP_LOGI(TAG, "tts stat: writes=%u audio=%.2fs stalls=%u maxgap=%ums "
+                      "wr_max=%ums wr_slow=%u",
+                 (unsigned)s_pw_writes,
+                 (double)s_pw_bytes / (double)(XZ_PLAY_RATE * XZ_PLAY_CHANNELS *
+                                              (XZ_BITS / 8)),
+                 (unsigned)s_pw_stall, (unsigned)s_pw_maxgap_ms,
+                 (unsigned)s_pw_wr_max_ms, (unsigned)s_pw_wr_slow);
         ESP_LOGI(TAG, "play tts %s", err ? "ERROR" : (fin ? "FINISHED" : "STOPPED"));
         notify(XZ_EVT_TTS_STATE, NULL, 0, err ? ESP_FAIL : ESP_OK);  /* role=0 stop */
         break;
@@ -429,13 +554,23 @@ static void xz_uplink_task(void *arg)
             fed_b += (uint32_t)ret;
         }
 
-        /* 水位（每 50 帧 ≈ 3s 一条）：可追溯"按了多久/送了多少" */
+        /* 水位（每 50 帧 ≈ 3s 一条）：可追溯"按了多久/送了多少"
+         * ★ 2026-11-11 追加 wifi rssi/ch：下行 TTS 卡顿时用来判断是链路弱
+         *   还是拉流慢（拉流只有 8~24 KB/s，PC 同源 130+ KB/s）。 */
         if ((frames % 50) == 0) {
+            wifi_ap_record_t ap;
+            int rssi = 0;
+            unsigned ch = 0;
+            if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+                rssi = ap.rssi;
+                ch = ap.primary;
+            }
             ESP_LOGI(TAG, "uplink: frames=%u fed=%uKB ptt=%d link=%d tts=%d "
-                          "music=%d xrun=%u",
+                          "music=%d xrun=%u | wifi rssi=%d ch=%u",
                      (unsigned)frames, (unsigned)(fed_b / 1024),
                      (int)s_ptt_on, (int)s_link, (int)s_tts_active,
-                     (int)s_music_playing, (unsigned)s_rec_xrun_risk);
+                     (int)s_music_playing, (unsigned)s_rec_xrun_risk,
+                     rssi, ch);
         }
 
         /* 空闲自动收会话（防 codec 被永久占死） */
@@ -503,10 +638,9 @@ static void session_teardown(void)
     }
     audio_manager_deinit();
 
-    if (s_rec_scratch) {
-        heap_caps_free(s_rec_scratch);
-        s_rec_scratch = NULL;
-    }
+    /* 双麦前端：GSC 模式还持有 gsc 句柄 + PSRAM 缓冲，必须显式放 */
+    mic_fe_deinit();
+
     if (s_uplink_buf) {
         heap_caps_free(s_uplink_buf);
         s_uplink_buf = NULL;
@@ -580,15 +714,19 @@ static esp_err_t session_setup(void)
     s_spk = spk;
     s_mic = mic;
 
-    /* 2. audio_manager（play 16k/2ch 锚点，rec 声明 16k/1ch） */
+    /* 1.5 双麦前端（★ 必须在 audio_manager_init 之前：
+     *     rec_io 声道数与 AFE 输入布局都由它决定，写死会打架） */
+    ESP_GOTO_ON_ERROR(mic_fe_init(NULL), fail, TAG, "mic_fe_init");
+
+    /* 2. audio_manager（play 16k/2ch 锚点；rec 声道/布局跟随双麦前端） */
     audio_manager_config_t acfg = DEFAULT_AUDIO_MANAGER_CONFIG();
     acfg.play_io.write_cb = xz_play_write_cb;
     acfg.rec_io.read_cb   = xz_rec_read_cb;
     audio_manager_config_set_play_io_format(&acfg, XZ_PLAY_RATE, XZ_BITS,
                                             XZ_PLAY_CHANNELS);
     audio_manager_config_set_rec_io_format(&acfg, XZ_SAMPLE_RATE, XZ_BITS,
-                                           XZ_BOARD_CHANNELS);
-    snprintf(acfg.mic_layout, sizeof(acfg.mic_layout), "%s", XZ_MIC_LAYOUT);
+                                           mic_fe_out_channels());
+    snprintf(acfg.mic_layout, sizeof(acfg.mic_layout), "%s", mic_fe_layout());
     ESP_GOTO_ON_ERROR(audio_manager_init(&acfg), fail, TAG, "audio_manager_init");
 
     /* 3. open 两个 dev */
@@ -606,14 +744,20 @@ static esp_err_t session_setup(void)
                         ? ESP_OK : ESP_FAIL, fail, TAG, "open spk");
     ESP_GOTO_ON_ERROR(esp_codec_dev_open(mic, &fs_mic) == ESP_CODEC_DEV_OK
                         ? ESP_OK : ESP_FAIL, fail, TAG, "open mic");
+
     esp_codec_dev_set_out_vol(spk, 70);
     s_volume = 70;                  /* 与硬件同口径：/api/system/status 查到的就是它 */
     esp_codec_dev_set_in_gain(mic, 24.0);
 
-    /* 3.5 上行取 L 通道暂存 */
-    s_rec_scratch = heap_caps_malloc(XZ_REC_SCRATCH_BYTES,
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    ESP_GOTO_ON_FALSE(s_rec_scratch, ESP_ERR_NO_MEM, fail, TAG, "rec scratch alloc");
+    /* ★★ 必须在 open 之后，且必须在 set_in_gain 之后（顺序两处都关键）：
+     *   1) ADC 输入选择是 open 时才写进 0x72/0x73（es8389.c:527-528）；
+     *   2) set_in_gain → es8389_apply_mic_pga_gain → es8389_pga_gain_byte(gain,
+     *      ADCL_InputSel, 0) 用**编译期常量**重新生成整字节并整体写入 0x72/0x73
+     *      ⇒ 放在它前面，单端 sel 会被覆盖回差分（2026-11-10 实测踩过：开关=1
+     *      但 corr 仍是 -0.9，就是这里被吃掉了）。 */
+    mic_fe_attach_codec(mic);
+
+    /* 3.5 上行采集就绪标记（缓冲已收编进 mic_frontend，这里不再分配） */
     s_rec_last_tick = 0;
     s_rec_xrun_risk = 0;
 
@@ -623,8 +767,8 @@ static esp_err_t session_setup(void)
     pcfg.event_cb = xz_tts_event_cb;
     pcfg.event_cb_ctx = NULL;
     pcfg.block_until_done = false;
-    pcfg.task_config.task_core = 1;
-    pcfg.task_config.task_prio = 4;
+    pcfg.task_config.task_core = XZ_PLAY_TASK_CORE;
+    pcfg.task_config.task_prio = XZ_PLAY_TASK_PRIO;
     ESP_GOTO_ON_ERROR(audio_playback_open(&pcfg, &s_play), fail, TAG, "playback_open(tts)");
 
     /* 4b. 下行播放②：音乐通道（priority 1，让位者）
@@ -634,7 +778,7 @@ static esp_err_t session_setup(void)
      *   宁可少一层体验，也要保证说话/点歌不残废。 */
     pcfg.priority = XZ_MUSIC_PRIORITY;
     pcfg.event_cb = xz_music_event_cb;
-    pcfg.task_config.task_prio = 3;      /* 解码别抢 TTS 的 CPU */
+    pcfg.task_config.task_prio = XZ_MUSIC_TASK_PRIO;   /* 解码别抢 TTS 的 CPU */
     if (audio_playback_open(&pcfg, &s_music_h) != ESP_OK) {
         s_music_h = NULL;
         ESP_LOGW(TAG, "music channel open failed -> fallback to shared handle");
@@ -643,12 +787,29 @@ static esp_err_t session_setup(void)
                  XZ_MUSIC_PRIORITY, XZ_TTS_PRIORITY);
     }
 
-    /* 5. 上行 recorder：**PCM** 编码（修正 3：整条管线复用，含 AFE NS/VAD）。
-     *    AEC 必须关（MM 布局无参考通道，见改造前 §53 的实测结论）。 */
+    /* 5. 上行 recorder：**PCM** 编码（整条管线复用，含 AFE 前端处理）。
+     *    AEC 必须关：AEC 要播放参考通道（布局里的 'R'），本板采集链路没有参考，
+     *    硬开会把回声路径当噪声学（改造前 §53 的实测结论，仍然成立）。
+     *  ★ 一个必须知道的坑：av_processor 把 NS 标志接到 afe_cfg->se_init
+     *    （audio_processor.c:1212 `se_init = ns_enable`），而 `ns_init` 它根本没设。
+     *    也就是说 AV_PROCESSOR_AFE_FLAG_NS_ENABLE 打开的是 **SE(BSS 数组处理)**，
+     *    不是 NSNet 降噪 —— 它是双麦的开关，不是"降噪开关"。
+     *  ★ 2026-11-11 结案：本板**是两只独立麦**，右路极性反（P4 五态对照，§33）。
+     *    默认 MIC_FE_MODE=BSS ⇒ 这里走 if 分支，把 SE(BSS) 打开；
+     *    若 menuconfig 改回 MONO（1ch），自动走 else 只开 VAD —— 两档都由
+     *    `mic_fe_out_channels()` 决定，不需要在业务层加开关。 */
     audio_recorder_config_t rcfg = DEFAULT_AUDIO_RECORDER_CONFIG();
     av_processor_afe_config_t afe = DEFAULT_AV_PROCESSOR_AFE_CONFIG();
-    afe.mode.afe.algo_mask = AV_PROCESSOR_AFE_FLAG_NS_ENABLE
-                           | AV_PROCESSOR_AFE_FLAG_VAD_ENABLE;
+    if (mic_fe_out_channels() == 2) {
+        /* BSS：2 麦直通 → AFE 按 "MM" 解析成两麦，SE 做盲源分离 + VAD。
+         * ★ 盲分离不需要麦间距，这是选它而非 GSC 的原因（§34.1）。 */
+        afe.mode.afe.algo_mask = AV_PROCESSOR_AFE_FLAG_NS_ENABLE
+                               | AV_PROCESSOR_AFE_FLAG_VAD_ENABLE;
+    } else {
+        /* MONO / GSC：前端只给一路，AFE 再做 BSS 等于把单声道当两麦解交织
+         *（或对波束输出做二次空间处理），纯浪费且会伤 ASR ⇒ 只留 VAD */
+        afe.mode.afe.algo_mask = AV_PROCESSOR_AFE_FLAG_VAD_ENABLE;
+    }
     rcfg.afe_config = afe;
     av_processor_encoder_config_t *enc = &rcfg.encoder_cfg;
     enc->format = AV_PROCESSOR_FORMAT_ID_PCM;
@@ -658,17 +819,65 @@ static esp_err_t session_setup(void)
     enc->params.pcm.audio_info.frame_duration = XZ_FRAME_MS;
     rcfg.recorder_event_cb = NULL;
     rcfg.recorder_ctx = NULL;
-    rcfg.recorder_task_config.task_core = 1;
-    ESP_GOTO_ON_ERROR(audio_recorder_open(&rcfg, &s_recorder), fail, TAG, "recorder_open");
+    /* ★★ §35 核隔离 + 降优先级（见 XZ_REC_TASK_* 宏处的完整推导）。
+     *   组件默认：feed=core0/prio5、fetch=core1/prio5、recorder=core0/prio10；
+     *   工程此前把 recorder 覆写成 core1/prio10，于是 core1 上 prio10 压着
+     *   播放 prio7，core0 上拉流 prio10 又与它平级 ⇒ BSS 一变重就互相拖。
+     *   现在三条录音任务统一 core0，recorder 降到 6：
+     *     · 播放(7) 独占 core1；
+     *     · 拉流(10) 在 core0 仍是绝对最高，BSS(5) 抢不过它；
+     *     · recorder(6) 仍压得住 AFE feed/fetch(5)，管线不会饿。
+     *   ★ feed 的 core 本来就是 0，显式写出来是为了让这张表在代码里可读，
+     *     防止以后有人改组件默认值时静默破坏隔离。 */
+    rcfg.afe_feed_task_config.task_core  = XZ_REC_TASK_CORE;
+    rcfg.afe_fetch_task_config.task_core = XZ_REC_TASK_CORE;
+    rcfg.recorder_task_config.task_core  = XZ_REC_TASK_CORE;
+    rcfg.recorder_task_config.task_prio  = XZ_REC_TASK_PRIO;
+
+    /* ★★ 双麦 BSS 的失败兜底（2026-11-11 落地）。
+     *   BSS 是本板唯一的双麦算法（不需要麦间距），但它比单麦 VAD 多吃
+     *   一份数组处理内存 + CPU；本工程内部 RAM 余量只有约 4 KB，
+     *   任何一次 AFE 创建失败都会让整条语音链路开不起来。
+     *   ⇒ 先按双麦开；失败就退回"同一份 2ch 采集、AFE 只用第一路"
+     *     （afe_config_check 的原话：SE 关掉时只用第一个麦克风通道）。
+     *     这样最坏情况等价于原来的单麦，而不是彻底没声。
+     *   ★ 不在这里把 mic_fe 切回 MONO：rec_io 已按 2ch 声明，
+     *     中途改 out_channels 会让 read_cb 的字节数/帧数对不上。 */
+    esp_err_t rec_err = audio_recorder_open(&rcfg, &s_recorder);
+    if (rec_err != ESP_OK && mic_fe_out_channels() == 2) {
+        ESP_LOGW(TAG, "recorder_open with BSS failed (%s) -> retry: AFE 只用第一路（单麦降级）",
+                 esp_err_to_name(rec_err));
+        rcfg.afe_config.mode.afe.algo_mask = AV_PROCESSOR_AFE_FLAG_VAD_ENABLE;
+        rec_err = audio_recorder_open(&rcfg, &s_recorder);
+    }
+    ESP_GOTO_ON_FALSE(rec_err == ESP_OK, rec_err, fail, TAG, "recorder_open");
+    /* ★ 这一行是 BSS 的"代价台账"：双麦比单麦多一份数组处理，
+     *   本工程内部 RAM 只有约 4 KB 余量 ⇒ 必须让 largest 在这里留痕，
+     *   否则后面 WiFi/播放撞内存时无法判断是不是 BSS 吃掉的。
+     *   口径：只看 largest_free_block，不看 free_size（碎片时 free 仍很大）。 */
+    ESP_LOGI(TAG, "uplink frontend: %s (mic=%dch layout=%s) -> 上行 1ch | "
+                  "INT free=%u largest=%u | PSRAM free=%uKB",
+             (mic_fe_out_channels() == 2) ? "SE(BSS)+VAD" : "VAD",
+             mic_fe_out_channels(), mic_fe_layout(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
 
     /* 6. 上行任务 + PSRAM 读缓冲 */
     s_uplink_buf = heap_caps_calloc(1, XZ_REC_READ_SIZE, MALLOC_CAP_SPIRAM);
     ESP_GOTO_ON_FALSE(s_uplink_buf, ESP_ERR_NO_MEM, fail, TAG, "uplink buf");
-    if (xTaskCreate(xz_uplink_task, "pet_uplink", 3584, NULL, 5, &s_uplink_task)
-        != pdPASS) {
+    /* §35：上行任务也钉 core0，避免它在两核间漂到播放核去。
+     * ★ 栈留在内部 RAM（xTaskCreatePinnedToCore 默认内部），符合 F35 铁律；
+     *   本任务会走 flash/NVS 之外的纯缓冲路径，但保守起见不启用外置栈。 */
+    if (xTaskCreatePinnedToCore(xz_uplink_task, "pet_uplink", 3584, NULL, 5,
+                                &s_uplink_task, XZ_REC_TASK_CORE) != pdPASS) {
         s_uplink_task = NULL;
         ESP_GOTO_ON_ERROR(ESP_ERR_NO_MEM, fail, TAG, "uplink task");
     }
+    /* 验收台账：一行看清两核的优先级排序（拉流 10 是组件固定，不在此配置）。 */
+    ESP_LOGI(TAG, "cpu affinity: core0 = io_http(10) > recorder(%d) > "
+                  "AFE feed,fetch(5) / uplink(5) | core1 = play(%d) only",
+             XZ_REC_TASK_PRIO, XZ_PLAY_TASK_PRIO);
 
     /* 7. 上行帧缓冲（427 KB PSRAM，一次分配） */
     ESP_GOTO_ON_ERROR(voice_service_init(), fail, TAG, "voice buf");
@@ -792,6 +1001,17 @@ static void xz_task(void *arg)
 
 void xiaozhi_service_init(void)
 {
+    /* ★★ 双麦前端必须在这里初始化，不能只留在 session_setup 里。
+     *   原因（2026-11-10 实机日志暴露）：session_setup 只在**首次会话**才跑，
+     *   而 WiFi/网关不通时永远走不到那一步 ⇒ 串口里既看不到 "MIC_FE: ready"，
+     *   紧接着下面那行 "pet session service ready (mic=...)" 又会去读**还没初始化**
+     *   的 s_cfg（全零正好落在 BSS/MM/2 默认分支），回显得像"双麦已生效"。
+     *   两个假象叠起来会让人以为改动没编进去。
+     *   BSS 模式本函数零分配（只填 s_cfg），GSC 才 malloc PSRAM，提前调无成本。 */
+    if (mic_fe_init(NULL) != ESP_OK) {
+        ESP_LOGW(TAG, "mic_frontend init failed (mic array falls back to raw 2ch)");
+    }
+
     s_cmd_q = xQueueCreate(6, sizeof(xz_cmd_t));
     MEM_FAIL_FAST(s_cmd_q, TAG, "xQueueCreate(6, xz_cmd_t)", 6 * sizeof(xz_cmd_t));
     BaseType_t ok = xTaskCreate(xz_task, "pet_svc", 4096, NULL, 5, &s_task);
@@ -843,8 +1063,9 @@ void xiaozhi_service_init(void)
         ESP_LOGW(TAG, "ai_action init failed (cloud actions disabled)");
     }
 
-    ESP_LOGI(TAG, "pet session service ready (mic_layout=%s ch=%d, gateway=%s)",
-             XZ_MIC_LAYOUT, XZ_BOARD_CHANNELS, ws_client_get_session_id());
+    ESP_LOGI(TAG, "pet session service ready (mic=%s layout=%s ch=%d, gateway=%s)",
+             mic_fe_mode_name(), mic_fe_layout(), mic_fe_out_channels(),
+             ws_client_get_session_id());
 }
 
 esp_err_t xiaozhi_service_start(void)

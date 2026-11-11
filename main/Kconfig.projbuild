@@ -1,0 +1,163 @@
+menu "麦克风前端 / MIC Frontend（双麦 BSS）"
+
+    choice MIC_FE_MODE_SEL
+        prompt "采集模式"
+        default MIC_FE_MODE_SEL_BSS
+        help
+            2026-11-11 上机五态对照已结案：本板**确实是两只独立模拟麦**，
+            右路（ADC2）只是极性反相（corr 从 −0.99 翻正到 +0.96/+0.64）。
+
+            ⇒ 默认 BSS（双麦盲源分离）。BSS 不需要麦间距，是本板唯一
+              不依赖几何尺寸的双麦算法；GSC 需要实测间距，暂不启用。
+            ⇒ 若 BSS 在某些环境反而更差（旁瓣抑制伤到近场人声），
+              把本项改回 MONO 即可，无需改代码。
+
+            ★ 必须同时保持 MIC_FE_INVERT_R=y，否则 BSS 拿到的是"一路反相"
+              的双麦数据，分离质量会明显下降（右路硬件反相是 ES8389 的
+              ADCR 差分接法决定的，且驱动每次 open 都会清掉 0x25.bit5）。
+        config MIC_FE_MODE_SEL_MONO
+            bool "MONO：只取 L，输出 1ch（回退档）"
+        config MIC_FE_MODE_SEL_BSS
+            bool "BSS：2ch 直通交给 AFE 的 SE(BSS)（默认，双麦）"
+        config MIC_FE_MODE_SEL_GSC
+            bool "GSC：esp_gsc_* 波束成形，输出 1ch（需实测麦间距）"
+    endchoice
+
+    choice MIC_FE_ADC_PROBE_SEL
+        prompt "ES8389 ADC 输入选择复测"
+        default MIC_FE_ADC_PROBE_SEL_AUTO
+        help
+            AUTO = 不覆盖驱动默认（0x72 / 0x73 都写差分 sel=1），正常固件用这个。
+            MIC2P = 把 ADCL 强制成单端 MIC2P（sel=6），用来验证第二只麦是否有信号。
+            SE_1P2N = 单端 MIC1P / MIC2N（sel=5/5），复现 2026-11-10 的历史实验。
+            ★ 复测完必须改回 AUTO；这些档位不是可用的正式配置。
+        config MIC_FE_ADC_PROBE_SEL_AUTO
+            bool "AUTO：不覆盖驱动默认（正常固件）"
+        config MIC_FE_ADC_PROBE_SEL_MIC2P
+            bool "复测：ADCL = 单端 MIC2P（0x72 sel=6）"
+        config MIC_FE_ADC_PROBE_SEL_SE_1P2N
+            bool "复测：ADCL=MIC1P / ADCR=MIC2N（sel=5/5）"
+    endchoice
+
+    config MIC_FE_INVERT_R
+        bool "R 通道极性取反（本板右麦反相，默认开）"
+        default y
+        help
+            2026-11-11 五态对照实测结论：右路是**独立的第二只麦**，但极性反相
+            （copy21 对照证实槽位映射无误、mute 对照证实两路独立；硬件翻位后
+            corr 从 −0.99 → +0.96/+0.64，且 L/R RMS 不相等）。
+
+            打开后三个采集入口统一把 R 取负：
+              · MONO 模式只影响诊断统计，不改上行数据；
+              · BSS / GSC 模式直接决定送给 AFE / GSC 的双麦数据是否同相。
+
+            ★ 为什么不能用硬件位（0x25.bit5）固化：驱动 es8389.c:257 每次
+              codec open 都写 `0x25 = 0x0A + (0<<5)`，硬件位不跨会话保存。
+              软件取负是唯一稳定做法。
+
+            ★ 只有换板/改线（右麦正接）时才需要关掉；关掉后 BSS 质量会下降。
+
+    menu "P4 硬件级对照实验（★ 2026-11-11 已结案，交付固件全关）"
+
+        config MIC_FE_PROBE_ADC2_FROM_ADC1
+            bool "P4.1 副本对照：0x23.bit4 = ADC1 数据复制到 ADC2"
+            default n
+            help
+                datasheet 0x23 ADC MODE CONTROL bit4 = ADC2_CF_SRCSEL
+                （0=normal，1=ADC1 channel to ADC2 channel）。
+                打开后 R 槽变成 L 的严格副本。
+
+                判据：corr 必须变成 +1.000 且 L_rms == R_rms。
+                  · 过了 ⇒ 说明诊断统计与槽位映射（L=ADC1 / R=ADC2）可信，
+                    后续 P4.2/P4.3 的结论才成立；
+                  · 没过 ⇒ 先怀疑槽位/统计有偏差，别继续判"双麦不成立"。
+
+                ★ 这是"验证工具是否可信"的对照，不是功能开关。验完必须关。
+                ★ 与 MIC_FE_ADC_PROBE_SEL 互不影响，但建议先单独跑。
+
+        config MIC_FE_PROBE_HW_INVERT_R
+            bool "P4.2 硬件翻 R：0x25.bit5 = ADC2_180C（输出反相）"
+            default n
+            help
+                datasheet 0x25 ADC HPF CONTROL 2 bit5 = ADC2_180C
+                （0=normal，1=output invert），默认值 0x06。
+
+                判据：与 P2 的软件 MIC_FE_INVERT_R 结果对照。
+                  · corr 同样由 -0.9x 变 +0.9x ⇒ 极性确实在 codec 模拟/数字通路里，
+                    软件翻转路径没问题；
+                  · 两者不一致 ⇒ 数据路径/槽位有偏差，先查清楚再判双麦。
+
+                ★ 这个开关会把 R 真的取反（BSS/GSC 也会受影响）；
+                  MONO 下只改诊断统计，上行仍只取 L。
+
+        config MIC_FE_PROBE_MUTE_ADC2
+            bool "P4.3a 静音 ADC2 输出：0x20.bit0（R 应归零，L 不变）"
+            default n
+            help
+                datasheet 0x20 ADC SP CONTROL bit0 = ADC2_P2S_SWMUTE
+                （0=normal，1=mute ADC2 output to 0）。
+
+                判据：R_rms / peak R 立刻掉到 0 或底噪，L 完全不变
+                  ⇒ 两路输出独立、槽位没有对调。
+
+        config MIC_FE_PROBE_MUTE_ADC1
+            bool "P4.3b 静音 ADC1 输出：0x20.bit1（L 应归零，上行会没声）"
+            default n
+            help
+                datasheet 0x20 ADC SP CONTROL bit1 = ADC1_P2S_SWMUTE。
+
+                判据：L_rms / peak L 归零、R 不变 ⇒ 与 P4.3a 互为镜像，
+                  证明槽位映射正确。
+
+                ⚠ MONO 模式下 L 就是上行唯一音源：打开后唤醒/识别必然失效，
+                  只用于对照观察，验完立刻关闭。
+
+        config MIC_FE_PROBE_RUNTIME_SWITCH
+            bool "P4.4 运行时切换：长按 SET 键循环切探针（免反复烧录）"
+            default n
+            help
+                ★ 2026-11-11 五态实测已全部通过，本项**结案**：交付固件保持 n
+                  （否则误触长按会改 ADC 寄存器，长按也会被占用）。
+
+                打开后**一版固件跑完全部 P4 实验**，不用再为每一项重新编译烧录：
+
+                  长按 SET（≥1.5 s）→ 循环切换
+                    ① 全关（基线）
+                    ② 副本对照（0x23.bit4）
+                    ③ 硬件翻 R（0x25.bit5）
+                    ④ 静 ADC2 / R（0x20.bit0）
+                    ⑤ 静 ADC1 / L（0x20.bit1）
+                    ⑥ 回到 ①
+
+                每次切换都会：
+                  · 立即写寄存器（幂等 RMW，**含主动清位**，所以能同一次上电内来回 A/B）；
+                  · 打一行 `P4 runtime: state=N/5 name=xxx mask=0x.. -> ...`；
+                  · 之后 diag 每 5 s 补写一次，防止别的模块重开 mic 冲掉。
+
+                ★ 与上面四个编译期开关的关系：编译期开关只决定**开机初值**，
+                  一旦长按过，就完全由运行时状态接管（编译期值被覆盖）。
+                ★ 交付固件必须把本项关掉（=n），否则误触长按会改 ADC 寄存器。
+                ★ 代价：SET 键长按被占用。业务侧（pet_overlay_key_feed）只用
+                  SET 的单击，不冲突。
+
+    endmenu
+
+endmenu
+
+menu "音频链路 / Audio Pipeline（受控配置）"
+
+    config PET_MP_RATE_CVT_ENABLE
+        bool "本地音乐 gmf pool 注册 rate_cvt 元素"
+        default y
+        help
+            正常固件保持 y。这是唯一受版本控制的重采样诊断开关，
+            用来替代 2026-11-10 §27 里那两个已撤销的托管组件补丁。
+            设为 n 时 init_gmf_pool() 完全不注册 rate_cvt 元素，仅用于
+            A/B 定位 task_wdt / fa_resample_process：
+              · 44100 歌曲不受影响：audio_render_optimize_pipeline() 在
+                in/out 采样率与每秒字节数都相等时本就不创建该元素；
+              · 非 44100 源会建链失败、直接播不出来（pool 找不到元素，
+                esp_gmf_pool_new_element 收到 NULL tag），不是"变调"。
+            验完必须改回 y。
+
+endmenu

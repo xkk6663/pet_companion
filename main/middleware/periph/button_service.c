@@ -13,6 +13,15 @@
 #include "freertos/semphr.h"
 #include "freertos/queue.h"
 
+/* P4 双麦探针的运行时切换（调试专用）。
+ * ★ 只有打开 CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH 才引入 audio 层依赖；
+ *   默认 n 时本文件与音频层完全无关，分层不污染。
+ * ★ 为什么挂 SET 长按：pet_overlay_key_feed() 只用 SET 的 SINGLE_CLICK，
+ *   MODE 的 PRESS_DOWN 被 PTT 占用，VOL± 是音量 —— 长按是唯一空闲手势。 */
+#if CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH
+#include "mic_frontend.h"
+#endif
+
 static const char *TAG = "BTN_SVC";
 
 static button_handle_t s_btns[BTN_ID_NUM];
@@ -94,6 +103,19 @@ static void adjust_volume(int delta)
     publish_volume();
 }
 
+/* P4 探针切换：长按 SET 起效，不走 s_evt_cb（业务层没有长按这个事件） */
+#if CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH
+static void button_long_press_cb(void *button_handle, void *user_data)
+{
+    (void)button_handle;
+    btn_id_t id = (btn_id_t)(intptr_t)user_data;
+    if (id == BTN_ID_SET) {
+        ESP_LOGW(TAG, "SET long-press -> P4 probe next");
+        mic_fe_p4_next();
+    }
+}
+#endif
+
 static void button_event_cb(void *button_handle, void *user_data)
 {
     btn_id_t button = (btn_id_t)(intptr_t)user_data;
@@ -157,6 +179,16 @@ void button_service_init(void)
         iot_button_register_cb(s_btns[i], BUTTON_DOUBLE_CLICK,  NULL, button_event_cb, (void *)(intptr_t)i);
         iot_button_register_cb(s_btns[i], BUTTON_PRESS_END,     NULL, button_event_cb, (void *)(intptr_t)i);
     }
+
+#if CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH
+    /* P4 探针切换：只挂 SET 的长按（业务侧只用 SET 的单击，长按是空闲手势）。
+     * 触发时长由 CONFIG_BUTTON_LONG_PRESS_TIME_MS 决定，当前 1500 ms。 */
+    iot_button_register_cb(s_btns[BTN_ID_SET], BUTTON_LONG_PRESS_START, NULL,
+                           button_long_press_cb, (void *)(intptr_t)BTN_ID_SET);
+    ESP_LOGW(TAG, "P4 runtime switch ON: long-press SET (%d ms) cycles probes",
+             CONFIG_BUTTON_LONG_PRESS_TIME_MS);
+#endif
+
     ESP_LOGI(TAG, "Registered %d ADC buttons, vol=%d", BTN_ID_NUM, s_volume);
 }
 

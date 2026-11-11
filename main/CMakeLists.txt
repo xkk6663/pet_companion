@@ -1,6 +1,8 @@
 idf_component_register(SRCS
                         "app/main.c"
                         "middleware/audio/audio_service.c"
+                        ## ---- 双麦前端（BSS 直通 / GSC 波束成形）----
+                        "middleware/audio/mic_frontend.c"
                         "middleware/audio/rec_local_service.c"
                         "middleware/audio/media_player_service.c"
                         ## ---- A2DP Source 移植：蓝牙底座 + 推流管线 + LRC 解析 ----
@@ -61,6 +63,8 @@ idf_component_register(SRCS
                         "ui/tab_record.c"
                         "ui/pet_overlay.c"
                         "ui/ui_binfont.c"
+                        ## ---- 拼音候选字：LVGL 默认表是繁体，换成 t2s 简体表 ----
+                        "ui/pinyin_dict_simp.c"
                         "ui/tab_camera.c"
                         "ui/tab_video.c"
                         "ui/tab_files.c"

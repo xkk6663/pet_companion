@@ -607,13 +607,27 @@ static bool do_wallpaper(const char *args, char *data, size_t cap)
     char cur[80];
     wallpaper_service_get_current_name(cur, sizeof(cur));
 
-    /* 池内随机挑一张（排除当前）。最多扫 64 个候选就够，池子不会更大。 */
-    char cand[64][64];
-    int n = 0;
+    /* 池内随机挑一张（排除当前）。
+     *
+     * ★★ 绝不把候选名列表放栈上（2026-11-10 实机 panic 的根因）：
+     *   本函数原来是 `char cand[64][64]` —— 一个 4096 B 的栈数组，
+     *   `-Wframe-larger-than=1024` 实测整帧 **4176 B**；而调用链是
+     *   `action_task`(帧 2184 B) → `do_wallpaper`(4176 B) ≈ 6.3 KB，
+     *   叠在 ACT_STACK=7168 上，再加 opendir/readdir 的 VFS 帧就必溢出：
+     *   `***ERROR*** A stack overflow in task ai_action has been detected.`
+     *   用户说的"调用换壁纸就宕机"就是这一行。
+     *
+     *   改成**蓄水池抽样**（reservoir sampling）：走一遍目录，第 i 个候选
+     *   以 1/i 的概率顶掉手里那个 —— 均匀随机、且栈上只留一个 64 B 的
+     *   文件名。顺带解掉原来"最多只扫 64 个"的上限。
+     *   ⇒ 改完本函数帧 ≈ 150 B，action_task 链路峰值 ≈ 2.4 KB / 7 KB。 */
+    char pick[64];
+    pick[0] = '\0';
+    int seen = 0;                            /* 通过筛选的第几个候选 */
     DIR *d = opendir(WALLPAPER_POOL_DIR);
     if (d) {
         struct dirent *ent;
-        while ((ent = readdir(d)) != NULL && n < 64) {
+        while ((ent = readdir(d)) != NULL) {
             const char *nm = ent->d_name;
             const char *ext = strrchr(nm, '.');
             if (!ext || (strcasecmp(ext, ".jpg") && strcasecmp(ext, ".jpeg"))) {
@@ -626,20 +640,21 @@ static bool do_wallpaper(const char *args, char *data, size_t cap)
              *   -Wformat-truncation 判死（本工程 -Werror），而且截断的名字
              *   交给 wallpaper_service 也必然校验失败。 */
             size_t ln = strlen(nm);
-            if (ln >= sizeof(cand[0])) {
+            if (ln >= sizeof(pick)) {
                 continue;
             }
-            memcpy(cand[n], nm, ln + 1);
-            n++;
+            seen++;
+            if (seen == 1 || (esp_random() % (uint32_t)seen) == 0) {
+                memcpy(pick, nm, ln + 1);
+            }
         }
         closedir(d);
     }
-    if (n == 0) {
+    if (seen == 0) {
         copy_str(data, cap, "壁纸池是空的");
         return false;
     }
 
-    const char *pick = cand[esp_random() % (uint32_t)n];
     esp_err_t e = wallpaper_service_request_set(pick);
     if (e != ESP_OK) {
         snprintf(data, cap, "换壁纸失败: %s", esp_err_to_name(e));

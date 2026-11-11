@@ -34,7 +34,8 @@
 
 #define REC_DIR         SDCARD_MNT_PATH"/music"
 #define REC_RATE        16000
-#define REC_CHANNELS    2       /* 板级双 mic（同 xiaozhi XZ_BOARD_CHANNELS） */
+#define REC_CHANNELS    2       /* 板级双 mic（2ch 立体声落盘，L/R 各一路麦；
+                                 * 参见 middleware/audio/mic_frontend.h 的双麦说明） */
 #define REC_BITS        16
 #define REC_CHUNK       2048    /* 32ms @ 64 KB/s */
 #define REC_MAX_MS      (300U * 1000U)

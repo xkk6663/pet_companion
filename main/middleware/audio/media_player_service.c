@@ -22,6 +22,7 @@
  */
 
 #include <string.h>
+#include "sdkconfig.h"                 /* CONFIG_PET_MP_RATE_CVT_ENABLE */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -46,6 +47,13 @@
 #include "middleware/bluetooth/bt_push_service.h"
 
 static const char *TAG = "MP_SVC";
+
+/* ★ 2026-11-11 §29：rate_cvt 的 A/B 开关已搬到 menuconfig
+ *   （main/Kconfig.projbuild → CONFIG_PET_MP_RATE_CVT_ENABLE，默认 y）。
+ *   托管组件已全部恢复官方原版，本文件不再依赖任何组件补丁。
+ *   设 n 只用于定位 task_wdt；非 44100 的歌会建链失败（不是变调），
+ *   44100 的歌不受影响——官方 audio_render_optimize_pipeline() 在
+ *   src==dest 时根本不创建 rate_cvt 元素。验完改回 y。 */
 
 /* ---- 命令 ---- */
 typedef enum {
@@ -96,9 +104,28 @@ static const audio_ext_fmt_t MP_OUT_FMT = {
     .sample_rate = 44100, .channels = 2, .bits = 16,
 };
 
+/* ★ 2026-11-10 修"切歌后点播放不出声"：ext STREAM 占用的**真实持有权**。
+ *   audio_service 里的 s_ext_mode 是全局单槽、没有 owner 概念 —— 谁 claim 的
+ *   就只能在同一个客户端 release。而 do_play() 在"正在播时再次 PLAY"这条路上
+ *   先 `esp_player_stop` 把 s_playing 置 false，接着又去 ext_claim ⇒ 撞自己
+ *   上次的占用，`ext_claim BUSY (mode=1)` ⇒ `play refused: audio_service busy`。
+ *   用一个本地标志记住"这占用是我自己拿的"，重播时直接复用，不再 claim。
+ *   任何 release 路径都必须同步清它（统一走 mp_ext_release()）。 */
+static volatile bool s_ext_held;
+
 /* ---- 前向 ---- */
 static int  mp_link_setup(void);
 static void mp_link_teardown(void);
+static void mp_ext_release(void);
+
+/* 归还 ext 流式占用（幂等；未持有时无操作） */
+static void mp_ext_release(void)
+{
+    if (s_ext_held) {
+        audio_service_ext_release();
+        s_ext_held = false;
+    }
+}
 
 static void notify_evt(mp_evt_id_t evt)
 {
@@ -150,10 +177,25 @@ static int init_gmf_pool(void)
     if (esp_gmf_bit_cvt_init(&bit_cfg, &el) == ESP_GMF_ERR_OK) {
         esp_gmf_pool_register_element(s_pool, el, NULL);
     }
+#ifdef CONFIG_PET_MP_RATE_CVT_ENABLE
     esp_ae_rate_cvt_cfg_t rate_cfg = DEFAULT_ESP_GMF_RATE_CVT_CONFIG();
+    /* DEFAULT_ESP_GMF_RATE_CVT_CONFIG() 是 44100→48000，与本服务
+     * out_sample_info(44100) 不一致，pipeline 建立时会白白触发一次
+     * need_reopen。显式对齐；源采样率仍由上游 sound info 事件覆盖，
+     * 非 44100 的歌曲 reopen 后照常重采样。
+     * complexity 取 1：非等采样率时把重采样 CPU 开销压到最低。 */
+    rate_cfg.src_rate   = MP_OUT_FMT.sample_rate;
+    rate_cfg.dest_rate  = MP_OUT_FMT.sample_rate;
+    rate_cfg.complexity = 1;
     if (esp_gmf_rate_cvt_init(&rate_cfg, &el) == ESP_GMF_ERR_OK) {
         esp_gmf_pool_register_element(s_pool, el, NULL);
     }
+    ESP_LOGI(TAG, "gmf pool: rate_cvt=ON dest=%d complexity=%d",
+             MP_OUT_FMT.sample_rate, rate_cfg.complexity);
+#else
+    (void)el;
+    ESP_LOGW(TAG, "gmf pool: rate_cvt=OFF (A/B diag only; non-44100 songs will FAIL to build pipeline)");
+#endif
     esp_ae_alc_cfg_t alc_cfg = DEFAULT_ESP_GMF_ALC_CONFIG();
     if (esp_gmf_alc_init(&alc_cfg, &el) == ESP_GMF_ERR_OK) {
         esp_gmf_pool_register_element(s_pool, el, NULL);
@@ -294,20 +336,23 @@ static void do_play(const char *path, bool use_bt)
 
     /* ---- LOCAL ---- */
     if (s_playing) {
-        /* 重复 PLAY：先停当前（不 release，马上复用 ext 占用） */
+        /* 重复 PLAY：先停当前，ext 占用**保留**给这一首个继续用 */
         esp_player_stop(s_player);
         s_playing = false;
     }
-    /* ext 流式占用：失败 = audio_service 忙（WAV/录音/通话/小智） */
-    if (!s_playing &&
-        audio_service_ext_claim(&MP_OUT_FMT) != ESP_OK) {
-        ESP_LOGW(TAG, "play refused: audio_service busy");
-        s_play_pending = false;
-        notify_evt(MP_EVT_ERROR);
-        return;
+    /* ext 流式占用：已持有则复用（切歌/重播）；未持有才 claim，
+     * 失败 = audio_service 忙（WAV/录音/通话/小智） */
+    if (!s_ext_held) {
+        if (audio_service_ext_claim(&MP_OUT_FMT) != ESP_OK) {
+            ESP_LOGW(TAG, "play refused: audio_service busy");
+            s_play_pending = false;
+            notify_evt(MP_EVT_ERROR);
+            return;
+        }
+        s_ext_held = true;
     }
     if (!s_player && mp_link_setup() != 0) {
-        audio_service_ext_release();
+        mp_ext_release();
         s_play_pending = false;
         notify_evt(MP_EVT_ERROR);
         return;
@@ -321,7 +366,7 @@ static void do_play(const char *path, bool use_bt)
     if (esp_player_run(s_player) != ESP_PLAYER_ERR_OK) {
         ESP_LOGE(TAG, "player run failed: %s", path);
         esp_player_stop(s_player);
-        audio_service_ext_release();
+        mp_ext_release();
         s_play_pending = false;
         notify_evt(MP_EVT_ERROR);
         return;
@@ -351,8 +396,13 @@ static void do_stop(void)
     if (s_playing) {
         esp_player_stop(s_player);
         s_playing = false;
-        audio_service_ext_release();
+        mp_ext_release();
         ESP_LOGI(TAG, "stopped by request");
+    } else if (s_ext_held) {
+        /* 状态错位兜底：播放器已停但 ext 还占着 ⇒ 这是"切歌后点播放被 BUSY"
+         * 的残留态，停一次就把它收干净。 */
+        ESP_LOGW(TAG, "stopped: release leaked ext claim");
+        mp_ext_release();
     }
     s_paused = false;
     s_play_pending = false;
@@ -396,8 +446,11 @@ static void mp_task(void *arg)
                 /* 播放器已自行停止（FINISHED/ERROR 事件），收尾归还 */
                 esp_player_stop(s_player);
                 s_playing = false;
-                audio_service_ext_release();
+                mp_ext_release();
                 ESP_LOGI(TAG, "finished");
+            } else if (s_ext_held) {
+                ESP_LOGW(TAG, "finished: release leaked ext claim");
+                mp_ext_release();
             }
             s_paused = false;
             s_play_pending = false;
