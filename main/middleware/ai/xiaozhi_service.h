@@ -140,6 +140,16 @@ void xiaozhi_service_set_evt_cb(xiaozhi_evt_cb_t cb);
  */
 esp_err_t xiaozhi_service_cloud_audio_play(const char *url);
 
+/**
+ * @brief 同上，但额外携带"这一句的原文"（§40 语音/文字对齐）。
+ *
+ * ★ text 会跟着这条 TTS **一起排队**，直到它真正起播的那一刻才抛
+ *   XZ_EVT_TEXT ⇒ UI 上一句一个气泡，气泡和声音同时出现。
+ *   text 可传 NULL（等价于 xiaozhi_service_cloud_audio_play）。
+ *   text 的所有权：本函数内部拷贝，调用方用完即可释放。
+ */
+esp_err_t xiaozhi_service_cloud_audio_play_ex(const char *url, const char *text);
+
 /** @brief 会话内播放一首 URL（点歌，语义同 cloud_audio_play，保留旧名给 ai_music）
  *
  * ★ 走**独立的音乐播放通道**（priority 1），与 TTS 通道（priority 2）分开：

@@ -162,6 +162,7 @@ typedef enum {
     XZ_CMD_STOP,
     XZ_CMD_PLAY,        /* url = PSRAM 堆串（xz_task 消费后释放） */
     XZ_CMD_STOP_PLAY,
+    XZ_CMD_TTS_DONE,    /* 内部：一段 TTS 结束，取下一条排队语音 */
 } xz_cmd_id_t;
 
 /* 播放内容类别：决定事件怎么上抛（TTS 要驱动嘴型，音乐不要） */
@@ -174,6 +175,8 @@ typedef enum {
 typedef struct {
     xz_cmd_id_t id;
     char       *url;
+    char       *text;   /* TTS：这一句的原文（可空）。起播那一刻才抛给 UI，
+                         * 让文字气泡和声音同时出现（§40）。 */
     uint8_t     kind;
 } xz_cmd_t;
 
@@ -191,6 +194,87 @@ static volatile bool s_ptt_on;       /* 上行任务已对齐态 */
 static volatile bool s_uplink_sending;   /* 上行任务正在发大帧（teardown 用） */
 
 static uint8_t      *s_uplink_buf;   /* PSRAM 读缓冲 */
+
+/* ★★ 2026-11-11 按句流水：云端会把一段回复拆成多句、分别下发一条 audio。
+ *   而 `audio_playback_play()` 在 PLAYING 时是"先 stop 再播新的"（换曲语义），
+ *   直接连着调会把上一句拦腰截断。这里做一条**有界 FIFO**：正在播时来的
+ *   URL 先排队，收到 AUDIO_FINISHED 再由 xz_task 取下一条。
+ *   depth=16 覆盖 200 字上限（≈10~16 句）的一整轮回复；溢出时丢新包并
+ *   打日志，宁可少念一句也不打断已排好的顺序。
+ *   所有权规则：入队即接管 url 指针，出队方负责 heap_caps_free。 */
+#define XZ_TTS_QUEUE_DEPTH  16
+
+/* 一条排队中的 TTS：URL + 这一句的原文。
+ * ★ 原文必须跟着 URL 一起排队（§40）：网关是"按句"下发 audio 的，文字也按句
+ *   跟着来；如果一收到就显示，第 2 句的文字会比它的声音早 4~5 s（因为第 1 句
+ *   还在播）。只有等这一句真正起播时才抛 XZ_EVT_TEXT，文字才和声音对齐。 */
+typedef struct {
+    char *url;
+    char *text;
+} tts_seg_t;
+
+static tts_seg_t    s_tts_q[XZ_TTS_QUEUE_DEPTH];
+static uint8_t      s_tts_q_head;
+static uint8_t      s_tts_q_tail;
+static uint8_t      s_tts_q_n;
+/* 已发起播放、尚未收到结束事件。用它（而不是 s_tts_active）判"忙"：
+ * s_tts_active 要等 PLAYING 回调才置位，中间那 100+ms 的窗口会把第二句打进来。 */
+static volatile bool s_tts_busy;
+
+static void tts_seg_free(tts_seg_t *s)
+{
+    if (s->url != NULL) {
+        heap_caps_free(s->url);
+        s->url = NULL;
+    }
+    if (s->text != NULL) {
+        heap_caps_free(s->text);
+        s->text = NULL;
+    }
+}
+
+static void tts_q_push(char *url, char *text)
+{
+    if (url == NULL) {
+        if (text != NULL) {
+            heap_caps_free(text);
+        }
+        return;
+    }
+    if (s_tts_q_n >= XZ_TTS_QUEUE_DEPTH) {
+        ESP_LOGW(TAG, "tts queue full (%d), drop %.48s", XZ_TTS_QUEUE_DEPTH, url);
+        heap_caps_free(url);
+        if (text != NULL) {
+            heap_caps_free(text);
+        }
+        return;
+    }
+    s_tts_q[s_tts_q_tail].url = url;
+    s_tts_q[s_tts_q_tail].text = text;
+    s_tts_q_tail = (uint8_t)((s_tts_q_tail + 1) % XZ_TTS_QUEUE_DEPTH);
+    s_tts_q_n++;
+}
+
+static bool tts_q_pop(tts_seg_t *out)
+{
+    if (s_tts_q_n == 0) {
+        return false;
+    }
+    *out = s_tts_q[s_tts_q_head];
+    s_tts_q[s_tts_q_head].url = NULL;
+    s_tts_q[s_tts_q_head].text = NULL;
+    s_tts_q_head = (uint8_t)((s_tts_q_head + 1) % XZ_TTS_QUEUE_DEPTH);
+    s_tts_q_n--;
+    return true;
+}
+
+static void tts_q_clear(void)
+{
+    tts_seg_t seg;
+    while (tts_q_pop(&seg)) {
+        tts_seg_free(&seg);
+    }
+}
 
 static audio_recorder_handle_t s_recorder;
 static audio_play_handle_t     s_play;      /* 通道①：TTS（priority 2） */
@@ -280,6 +364,15 @@ static TickType_t s_pw_last;
 static uint32_t   s_pw_wr_max_ms;
 static uint32_t   s_pw_wr_slow;     /* esp_codec_dev_write 自身 > 30ms 的次数 */
 
+/* ★ 2026-11-11 端到端延迟探针（回答"首响到底花在哪"）：
+ *   req  → PLAYING：player 建立 / HTTP open / 解码器 open
+ *   PLAYING → first：首字节到达 + 解码预滚（这一段才是 MP3 相对 WAV 的净增量）
+ *   first → 结束  ：纯播放时长
+ *   三段加起来 = "URL 到达设备 → 出声"的全部可优化空间（不含网关合成）。 */
+static int64_t    s_t_req_us;
+static int64_t    s_t_playing_us;
+static int64_t    s_t_first_us;
+
 static void xz_play_stat_reset(void)
 {
     s_pw_writes = 0;
@@ -289,6 +382,8 @@ static void xz_play_stat_reset(void)
     s_pw_last = 0;
     s_pw_wr_max_ms = 0;
     s_pw_wr_slow = 0;
+    s_t_playing_us = esp_timer_get_time();
+    s_t_first_us = 0;
 }
 
 static esp_err_t xz_play_write_cb(uint8_t *data, int size, void *ctx)
@@ -312,6 +407,9 @@ static esp_err_t xz_play_write_cb(uint8_t *data, int size, void *ctx)
     s_pw_last = now;
     s_pw_writes++;
     s_pw_bytes += (uint32_t)size;
+    if (s_pw_writes == 1) {
+        s_t_first_us = esp_timer_get_time();
+    }
 
     int64_t t0 = esp_timer_get_time();
     esp_err_t ret = (esp_codec_dev_write(s_spk, data, size) >= 0) ? ESP_OK : ESP_FAIL;
@@ -392,6 +490,7 @@ static void xz_tts_event_cb(audio_play_state_t state, void *ctx)
         bool err = (state == AUDIO_PLAY_STATE_ERROR);
         bool fin = (state == AUDIO_PLAY_STATE_FINISHED);
         s_tts_active = false;
+        s_tts_busy = false;
         s_last_act = xTaskGetTickCount();
         mic_fe_set_diag_hold(false);
         /* 供给质量：bytes/64000 = 实际送入 codec 的音频秒数。
@@ -403,8 +502,20 @@ static void xz_tts_event_cb(audio_play_state_t state, void *ctx)
                                               (XZ_BITS / 8)),
                  (unsigned)s_pw_stall, (unsigned)s_pw_maxgap_ms,
                  (unsigned)s_pw_wr_max_ms, (unsigned)s_pw_wr_slow);
-        ESP_LOGI(TAG, "play tts %s", err ? "ERROR" : (fin ? "FINISHED" : "STOPPED"));
-        notify(XZ_EVT_TTS_STATE, NULL, 0, err ? ESP_FAIL : ESP_OK);  /* role=0 stop */
+        /* 端到端延迟：req(收到URL)→PLAYING→首帧。首帧以后的都是纯播放，不参与延迟。 */
+        if (s_t_req_us && s_t_first_us) {
+            ESP_LOGI(TAG, "tts lat: req->play=%lldms play->first=%lldms total=%lldms",
+                     (long long)((s_t_playing_us - s_t_req_us) / 1000),
+                     (long long)((s_t_first_us - s_t_playing_us) / 1000),
+                     (long long)((s_t_first_us - s_t_req_us) / 1000));
+        }
+        ESP_LOGI(TAG, "play tts %s (queued=%u)", err ? "ERROR" : (fin ? "FINISHED" : "STOPPED"),
+                 (unsigned)s_tts_q_n);
+        /* ★ 按句流水：STOP 事件这里**不**上抛 idle —— 队列里还有下一句时，
+         *   中间那一瞬间的 idle 会让嘴型/UI 闪一下。统一由 xz_task 在
+         *   "队列真的空了"时发 stop（XZ_CMD_TTS_DONE 分支）。 */
+        xz_cmd_t m = { .id = XZ_CMD_TTS_DONE, .url = NULL, .kind = XZ_KIND_TTS };
+        xQueueSend(s_cmd_q, &m, 0);
         break;
     }
     default:
@@ -455,7 +566,7 @@ static void xz_music_event_cb(audio_play_state_t state, void *ctx)
  * 网关连接/收包
  * ============================================================ */
 
-static void queue_play(const char *url, xz_kind_t kind);
+static void queue_play(const char *url, xz_kind_t kind, const char *text);
 
 /* 云端推来的 TTS 在"codec 还没借出来"时只能挂起，等会话可用再补播。
  * 两个入口都要调：① 刚连上（state_cb）② 连接**早就**在（WS 常连），
@@ -464,7 +575,7 @@ static void flush_pending_audio(void)
 {
     if (s_pending_url[0]) {
         ESP_LOGI(TAG, "flush pending audio: %.48s", s_pending_url);
-        queue_play(s_pending_url, (xz_kind_t)s_pending_kind);
+        queue_play(s_pending_url, (xz_kind_t)s_pending_kind, NULL);
         s_pending_url[0] = '\0';
     }
 }
@@ -600,6 +711,8 @@ static void session_teardown(void)
      *   —— 云端要能主动找设备）。会话只借 codec/录音管线，收会话不等于断网。
      *   连接态一律以 ws_client_is_connected() 为准，不在这里缓存镜像。 */
     s_tts_active = false;
+    s_tts_busy = false;
+    tts_q_clear();          /* 会话结束：排队中的后续句子没有播放的意义了 */
     s_music_playing = false;
     s_play_url[0] = '\0';
     s_music_url[0] = '\0';
@@ -911,7 +1024,7 @@ fail:
  * 服务任务
  * ============================================================ */
 
-static void queue_play(const char *url, xz_kind_t kind)
+static void queue_play(const char *url, xz_kind_t kind, const char *text)
 {
     if (url == NULL || url[0] == '\0') {
         return;
@@ -922,9 +1035,20 @@ static void queue_play(const char *url, xz_kind_t kind)
         return;
     }
     strcpy(u, url);
-    xz_cmd_t cmd = { .id = XZ_CMD_PLAY, .url = u, .kind = (uint8_t)kind };
+    char *t = NULL;
+    if (text != NULL && text[0] != '\0') {
+        size_t n = strlen(text) + 1;
+        t = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+        if (t != NULL) {
+            memcpy(t, text, n);
+        }
+    }
+    xz_cmd_t cmd = { .id = XZ_CMD_PLAY, .url = u, .text = t, .kind = (uint8_t)kind };
     if (xQueueSend(s_cmd_q, &cmd, 0) != pdPASS) {
         heap_caps_free(u);
+        if (t != NULL) {
+            heap_caps_free(t);
+        }
         ESP_LOGW(TAG, "play dropped: cmd queue full");
     }
 }
@@ -948,11 +1072,27 @@ static void xz_task(void *arg)
             bool is_music = (cmd.kind == XZ_KIND_MUSIC);
             audio_play_handle_t h = is_music ? s_music_h : s_play;
             char *dst = is_music ? s_music_url : s_play_url;
+            /* ★ 2026-11-11 §39：本条 URL 是否"已入队"。入队后 cmd.url 被置 NULL，
+             *   若不加这个标记就会掉进下面的 else 分支 —— 那里会执行
+             *   `s_tts_busy = false`，把正在播的那句的"忙"标志误清掉：
+             *   第 3 句一到就被当成"空闲"直接起播，用换曲语义把第 1 句拦腰砍断。
+             *   日志里那条 `play dropped (handle=1 url=0)` 也是这么来的。 */
+            bool queued = false;
             /* 音乐通道没开起来 ⇒ 退化到共用 TTS 通道（老行为，会顶掉 TTS） */
             if (h == NULL && is_music) {
                 h = s_play;
                 dst = s_play_url;
                 ESP_LOGW(TAG, "music channel absent, sharing tts handle");
+            }
+            /* ★ 按句流水：TTS 正在播时来的下一句先排队，等 FINISHED 再播
+             *   （否则 audio_playback_play 会先 stop，把上一句拦腰砍断）。
+             *   音乐不走队列：点歌本来就是"换曲语义"，新歌顶掉旧的才对。 */
+            if (!is_music && s_tts_busy) {
+                tts_q_push(cmd.url, cmd.text);
+                cmd.url = NULL;
+                cmd.text = NULL;
+                queued = true;
+                ESP_LOGI(TAG, "tts queued (%u/%d)", (unsigned)s_tts_q_n, XZ_TTS_QUEUE_DEPTH);
             }
             if (h != NULL && cmd.url != NULL && cmd.url[0] != '\0') {
                 snprintf(dst, XZ_URL_MAX, "%s", cmd.url);
@@ -966,22 +1106,46 @@ static void xz_task(void *arg)
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                s_t_req_us = esp_timer_get_time();
+                if (!is_music) {
+                    s_tts_busy = true;      /* 先置忙：堵住 PLAYING 之前的那 100ms 窗口 */
+                    /* ★ 文字和声音同一刻出现（§40）：整段 text 不再等 LLM 写完，
+                     *   改成每句起播时抛一条，UI 一侧就是"一句一个气泡"。 */
+                    if (cmd.text != NULL) {
+                        notify(XZ_EVT_TEXT, cmd.text, 1, ESP_OK);
+                    }
+                }
                 esp_err_t err = audio_playback_play(h, dst);
                 ESP_LOGI(TAG, "play %s: %s (%.64s)",
                          is_music ? "music" : "tts", esp_err_to_name(err), dst);
                 if (err != ESP_OK) {
+                    if (!is_music) {
+                        s_tts_busy = false;     /* 起播失败没有结束事件，别把标志挂死 */
+                        tts_q_clear();
+                    }
                     notify(XZ_EVT_ERROR, "audio play failed", 0, err);
                 }
-            } else {
+            } else if (!queued) {
+                if (!is_music) {
+                    s_tts_busy = false;     /* 没有可播句柄：别把"忙"标志挂死 */
+                }
                 ESP_LOGW(TAG, "play dropped (handle=%d url=%p)", (int)(h != NULL),
                          (void *)cmd.url);
             }
             if (cmd.url != NULL) {
                 heap_caps_free(cmd.url);
             }
+            if (cmd.text != NULL) {
+                heap_caps_free(cmd.text);
+            }
         } else if (cmd.id == XZ_CMD_STOP_PLAY) {
             /* kind：NONE = 全停（barge-in）；TTS / MUSIC = 只停那一路 */
             uint8_t k = cmd.kind;
+            if (k == XZ_KIND_NONE || k == XZ_KIND_TTS) {
+                /* ★ 排队中的后续句子必须一起丢：用户已经在打断/离开了，
+                 *   再念下去就是"打不断"的坏体验。 */
+                tts_q_clear();
+            }
             if (s_play != NULL && (k == XZ_KIND_NONE || k == XZ_KIND_TTS)) {
                 esp_err_t err = audio_playback_stop(s_play);
                 ESP_LOGI(TAG, "play stop tts: %s", esp_err_to_name(err));
@@ -990,6 +1154,30 @@ static void xz_task(void *arg)
             if (s_music_h != NULL && (k == XZ_KIND_NONE || k == XZ_KIND_MUSIC)) {
                 esp_err_t err = audio_playback_stop(s_music_h);
                 ESP_LOGI(TAG, "play stop music: %s", esp_err_to_name(err));
+            }
+        } else if (cmd.id == XZ_CMD_TTS_DONE) {
+            /* 一段语音播完（或被停/出错）：队列里还有就接着播，真没了才收嘴型。 */
+            tts_seg_t next = { 0 };
+            if (tts_q_pop(&next) && s_play != NULL) {
+                snprintf(s_play_url, XZ_URL_MAX, "%s", next.url);
+                s_t_req_us = esp_timer_get_time();
+                s_tts_busy = true;
+                /* 这一句的文字就在此刻冒出来 —— 和它的声音对齐（§40） */
+                if (next.text != NULL) {
+                    notify(XZ_EVT_TEXT, next.text, 1, ESP_OK);
+                }
+                esp_err_t err = audio_playback_play(s_play, s_play_url);
+                ESP_LOGI(TAG, "play tts (next): %s (left=%u)",
+                         esp_err_to_name(err), (unsigned)s_tts_q_n);
+                tts_seg_free(&next);
+                if (err != ESP_OK) {
+                    s_tts_busy = false;
+                    tts_q_clear();
+                    notify(XZ_EVT_TTS_STATE, NULL, 0, err);
+                }
+            } else {
+                tts_seg_free(&next);    /* s_play 已在 teardown 里关了 */
+                notify(XZ_EVT_TTS_STATE, NULL, 0, ESP_OK);      /* role=0 stop */
             }
         }
     }
@@ -1012,8 +1200,10 @@ void xiaozhi_service_init(void)
         ESP_LOGW(TAG, "mic_frontend init failed (mic array falls back to raw 2ch)");
     }
 
-    s_cmd_q = xQueueCreate(6, sizeof(xz_cmd_t));
-    MEM_FAIL_FAST(s_cmd_q, TAG, "xQueueCreate(6, xz_cmd_t)", 6 * sizeof(xz_cmd_t));
+    /* 12：按句流水时云端会在几百毫秒内连推 5~10 条 audio，队列浅了会在
+     * WS 收包任务（prio 8）与 xz_task（prio 5）之间丢命令。 */
+    s_cmd_q = xQueueCreate(12, sizeof(xz_cmd_t));
+    MEM_FAIL_FAST(s_cmd_q, TAG, "xQueueCreate(12, xz_cmd_t)", 12 * sizeof(xz_cmd_t));
     BaseType_t ok = xTaskCreate(xz_task, "pet_svc", 4096, NULL, 5, &s_task);
     MEM_FAIL_FAST(ok == pdPASS, TAG, "xTaskCreate(pet_svc, 4096)", 4096);
 
@@ -1198,7 +1388,7 @@ void xiaozhi_service_set_evt_cb(xiaozhi_evt_cb_t cb)
     s_evt_cb = cb;
 }
 
-esp_err_t xiaozhi_service_cloud_audio_play(const char *url)
+esp_err_t xiaozhi_service_cloud_audio_play_ex(const char *url, const char *text)
 {
     if (url == NULL || url[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
@@ -1207,10 +1397,13 @@ esp_err_t xiaozhi_service_cloud_audio_play(const char *url)
         return ESP_ERR_INVALID_SIZE;
     }
     if (s_state == XZ_STATE_CHATTING && s_play != NULL) {
-        queue_play(url, XZ_KIND_TTS);
+        queue_play(url, XZ_KIND_TTS, text);
         return ESP_OK;
     }
-    /* 会话不在：挂起一条，起会话；连上后由 on_ws_state 补播 */
+    /* 会话不在：挂起一条，起会话；连上后由 on_ws_state 补播。
+     * ★ 文字不排队（§40）：挂起路径没有 FIFO 可放 text，只能立刻抛出去。
+     *   代价是"空闲时被云端主动推送"这一路文字会略早于声音（会话建立约 1 s）；
+     *   会话内的正常对话走 queue_play，是严格对齐的。 */
     snprintf(s_pending_url, sizeof(s_pending_url), "%s", url);
     s_pending_kind = XZ_KIND_TTS;
     if (s_state == XZ_STATE_IDLE) {
@@ -1222,7 +1415,15 @@ esp_err_t xiaozhi_service_cloud_audio_play(const char *url)
         }
         ESP_LOGI(TAG, "cloud audio queued, session starting: %.48s", url);
     }
+    if (text != NULL && text[0] != '\0') {
+        notify(XZ_EVT_TEXT, text, 1, ESP_OK);
+    }
     return ESP_OK;
+}
+
+esp_err_t xiaozhi_service_cloud_audio_play(const char *url)
+{
+    return xiaozhi_service_cloud_audio_play_ex(url, NULL);
 }
 
 esp_err_t xiaozhi_service_music_play(const char *url)
@@ -1236,7 +1437,7 @@ esp_err_t xiaozhi_service_music_play(const char *url)
     if (s_state != XZ_STATE_CHATTING || (s_music_h == NULL && s_play == NULL)) {
         return ESP_ERR_INVALID_STATE;
     }
-    queue_play(url, XZ_KIND_MUSIC);
+    queue_play(url, XZ_KIND_MUSIC, NULL);
     return ESP_OK;
 }
 

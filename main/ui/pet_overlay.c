@@ -49,6 +49,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
 
@@ -181,6 +182,13 @@ static bool s_prev_chatting;
 static lv_font_t *s_font_cjk;
 
 static uint32_t s_tick;
+
+/* 键盘响应诊断（见 pet_timer_cb 顶部说明）：只统计 50 ms 定时器的实际间隔 */
+#define PET_LAG_PROBE   1
+#if PET_LAG_PROBE
+static uint32_t s_lag_us;
+static uint32_t s_lag_log_us;
+#endif
 
 /* ============================================================
  *  事件桥（服务/播放器任务上下文）：只拷贝 + 入队
@@ -807,12 +815,39 @@ static void pet_timer_cb(lv_timer_t *t)
 {
     (void)t;
     s_tick++;
+
+    /* 键盘层是全屏不透明的：它盖住的东西再怎么动用户也看不见。
+     * 但 esp_lvgl_port 的 RGB **direct 模式每刷一帧都要把整屏 800x480（768 KB）
+     * 搬一次**（esp_lvgl_port_disp.c 的 flush：`lv_disp_flush_is_last()` 为真时
+     * 直接 `esp_lcd_panel_draw_bitmap(0, 0, H, V)` 并等 VSYNC），而打字机动画
+     * 50 ms 吐一次字 ⇒ 每秒 20 次全屏搬运。再叠上点按键产生的刷新，PSRAM 带宽
+     * 与 LVGL 线程都会被吃掉：用户看到的就是"打字时偶尔点不动 + 屏闪"。
+     * ⇒ 键盘打开期间跳过这些**看不见的**动画，收起时一次性补齐（kb_close_ui）。 */
+    bool kb_open = (s_kb_root != NULL) && !lv_obj_has_flag(s_kb_root, LV_OBJ_FLAG_HIDDEN);
+
+#if PET_LAG_PROBE
+    /* 诊断：正常情况下这个 50 ms 定时器间隔 ≈50 ms；>150 ms 说明 LVGL 线程被
+     * 长任务占住（全屏搬运等 VSYNC、音频/TTS 高优先级任务抢占、I2C 触摸读被锁），
+     * 触摸采样跟着变稀 ⇒ "点了没反应"。3 s 最多打一条；定位后把宏改 0。 */
+    uint32_t now_us = (uint32_t)esp_timer_get_time();
+    if (s_lag_us != 0) {
+        uint32_t gap_ms = (now_us - s_lag_us) / 1000;
+        if (gap_ms > 150 && (now_us - s_lag_log_us) > 3000000) {
+            s_lag_log_us = now_us;
+            ESP_LOGW(TAG, "lvgl lag %ums (kb=%d)", (unsigned)gap_ms, (int)kb_open);
+        }
+    }
+    s_lag_us = now_us;
+#endif
+
     evt_drain();
     key_req_drain();
     image_poll();
     preview_poll();
-    typing_tick();
-    chat_think_tick();
+    if (!kb_open) {
+        typing_tick();
+        chat_think_tick();
+    }
 
     /* 思考占位超时兜底：云端 30 s 没有任何回包（断链 / ASR 空 / 队列丢）时，
      * 别让"正在想"永远挂着 —— 那看起来就是"死机"。 */
@@ -839,10 +874,11 @@ static void pet_timer_cb(lv_timer_t *t)
         s_prev_ptt_vis = ptt_vis;
     }
 
-    /* 状态行（全中文；省略号统一用 ASCII "..."，中文省略号 U+2026 不在字表里） */
+    /* 状态行（全中文；省略号统一用 ASCII "..."，中文省略号 U+2026 不在字表里）
+     * ★ 键盘打开时顶栏被不透明键盘层盖住，刷了也看不见 ⇒ 跳过，少一帧全屏搬运。 */
     xiaozhi_state_t st = xiaozhi_service_get_state();
     bool chatting = (st == XZ_STATE_CHATTING);
-    if (chatting != s_prev_chatting || (s_tick % 20) == 0) {
+    if (!kb_open && (chatting != s_prev_chatting || (s_tick % 20) == 0)) {
         s_prev_chatting = chatting;
         if (chatting) {
             lv_label_set_text(s_status, xiaozhi_service_link_up() ? "在线" : "连接中");
@@ -935,6 +971,15 @@ static void ptt_cb(lv_event_t *e)
     }
 }
 
+/* 收起键盘层。
+ * ★ 键盘打开期间打字机动画被跳过（pet_timer_cb 的 kb_open 分支），这里必须
+ *   把攒下的整句一次吐完，否则一关键盘又要当着用户面慢慢吐一遍。 */
+static void kb_close_ui(void)
+{
+    lv_obj_set_hidden(s_kb_root, true);
+    typing_flush();
+}
+
 static void kb_ready_cb(lv_event_t *e)
 {
     (void)e;
@@ -942,13 +987,13 @@ static void kb_ready_cb(lv_event_t *e)
     if (txt && txt[0]) {
         submit_text(txt);
     }
-    lv_obj_set_hidden(s_kb_root, true);
+    kb_close_ui();
 }
 
 static void kb_cancel_cb(lv_event_t *e)
 {
     (void)e;
-    lv_obj_set_hidden(s_kb_root, true);
+    kb_close_ui();
 }
 
 static void kb_btn_cb(lv_event_t *e)
@@ -1188,27 +1233,30 @@ void pet_overlay_init(void)
     lv_obj_set_style_bg_opa(s_kb_root, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_kb_root, 0, 0);
     lv_obj_set_style_pad_all(s_kb_root, 12, 0);
+    /* ★ 键盘层必须**不可滚动**：标题为视觉居中放在 y=-6（52 行高 > 48 工具行），
+     *   内容会比容器高 6 px ⇒ lv_obj_create 默认带的 LV_OBJ_FLAG_SCROLLABLE 会把
+     *   手指在按键上的轻微拖动判成"滚动"：整层上下窜几像素（看着像频闪），
+     *   同时按键的 CLICKED 被滚动取消（"偶尔点了没反应"）。 */
+    lv_obj_clear_flag(s_kb_root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(s_kb_root, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_hidden(s_kb_root, true);
 
+    /* ---- 顶部工具行：标题在左，「取消 / 发送」在右，同一行 ----
+     * ★ 旧版标题 y=0、输入框 y=34，而 bin 字体 line_height()=52 ⇒ 标题框（52 高）
+     *   直接压到输入框上沿，看起来"几样东西粘在一起"（用户反馈）。
+     *   现在改成明确的三段式（坐标相对 pad 12 后的内容区，共 776x456）：
+     *     工具行 0..48 → 输入框 56..120 → 提示 124..176
+     *     → 候选条 190..238 → 键盘 246..456
+     *   每一段都留 >=8 px 的呼吸位，任何字号（含 52 行高）都不会互相压。 */
     lv_obj_t *kbtitle = lv_label_create(s_kb_root);
-    lv_label_set_text_static(kbtitle, "文字输入（英文 / 拼音，选候选字即输入中文）");
-    lv_obj_set_style_text_color(kbtitle, COL_SUBTEXT, 0);
+    lv_label_set_text_static(kbtitle, "文字输入");
+    lv_obj_set_style_text_color(kbtitle, COL_TEXT, 0);
     lv_obj_set_style_text_font(kbtitle, pet_font(), 0);
-    lv_obj_align(kbtitle, LV_ALIGN_TOP_LEFT, 0, 0);
+    /* 52 行高 > 48 工具行：上移 6 px，让 28 px 字形在行内视觉居中 */
+    lv_obj_align(kbtitle, LV_ALIGN_TOP_LEFT, 2, -6);
 
-    s_kb_ta = lv_textarea_create(s_kb_root);
-    lv_obj_set_size(s_kb_ta, 700, 56);
-    lv_obj_align(s_kb_ta, LV_ALIGN_TOP_MID, 0, 34);
-    lv_textarea_set_one_line(s_kb_ta, true);
-    lv_textarea_set_max_length(s_kb_ta, 120);
-    /* ★ 占位符必须全 ASCII：字体在 binfont 缺失时会回退 cn_20（小字表），
-     *   中文占位符可能出方框；ASCII 在任何一档都有。 */
-    lv_textarea_set_placeholder_text(s_kb_ta, "Type here ...");
-    /* 输入框要能显示中文 ⇒ 用全 CJK 的 pet_font()，不能用 UI_FONT_BIG（montserrat）。 */
-    lv_obj_set_style_text_font(s_kb_ta, pet_font(), 0);
-
-    lv_obj_t *ok = mk_btn(s_kb_root, 110, 48, COL_GREEN, true);
-    lv_obj_align(ok, LV_ALIGN_TOP_RIGHT, -130, 96);
+    lv_obj_t *ok = mk_btn(s_kb_root, 96, 44, COL_GREEN, true);
+    lv_obj_align(ok, LV_ALIGN_TOP_RIGHT, -104, 2);
     lv_obj_add_event_cb(ok, kb_ready_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *okl = lv_label_create(ok);
     lv_label_set_text_static(okl, "发送");
@@ -1216,8 +1264,8 @@ void pet_overlay_init(void)
     lv_obj_set_style_text_font(okl, pet_font(), 0);
     lv_obj_center(okl);
 
-    lv_obj_t *cancel = mk_btn(s_kb_root, 110, 48, COL_CARD, false);
-    lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, 0, 96);
+    lv_obj_t *cancel = mk_btn(s_kb_root, 96, 44, COL_CARD, false);
+    lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, 0, 2);
     lv_obj_add_event_cb(cancel, kb_cancel_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *clbl = lv_label_create(cancel);
     lv_label_set_text_static(clbl, "取消");
@@ -1225,9 +1273,65 @@ void pet_overlay_init(void)
     lv_obj_set_style_text_font(clbl, pet_font(), 0);
     lv_obj_center(clbl);
 
+    /* ---- 输入框：整宽 + 深色卡片风（默认浅色主题是白底黑字，在深蓝上像膏药）---- */
+    s_kb_ta = lv_textarea_create(s_kb_root);
+    lv_obj_set_size(s_kb_ta, 776, 64);
+    lv_obj_align(s_kb_ta, LV_ALIGN_TOP_MID, 0, 56);
+    lv_textarea_set_one_line(s_kb_ta, true);
+    lv_textarea_set_max_length(s_kb_ta, 120);
+    /* ★ 占位符必须全 ASCII：字体在 binfont 缺失时会回退 cn_20（小字表），
+     *   中文占位符可能出方框；ASCII 在任何一档都有。 */
+    lv_textarea_set_placeholder_text(s_kb_ta, "Type here ...");
+    /* 输入框要能显示中文 ⇒ 用全 CJK 的 pet_font()，不能用 UI_FONT_BIG（montserrat）。 */
+    lv_obj_set_style_text_font(s_kb_ta, pet_font(), 0);
+    lv_obj_set_style_bg_color(s_kb_ta, COL_CARD, 0);
+    lv_obj_set_style_bg_opa(s_kb_ta, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_kb_ta, COL_BORDER, 0);
+    lv_obj_set_style_border_width(s_kb_ta, 1, 0);
+    lv_obj_set_style_radius(s_kb_ta, 14, 0);
+    lv_obj_set_style_pad_left(s_kb_ta, 14, 0);
+    lv_obj_set_style_pad_right(s_kb_ta, 14, 0);
+    lv_obj_set_style_pad_top(s_kb_ta, 6, 0);
+    lv_obj_set_style_pad_bottom(s_kb_ta, 6, 0);
+    lv_obj_set_style_text_color(s_kb_ta, COL_TEXT, 0);
+    lv_obj_set_style_text_color(s_kb_ta, COL_SUBTEXT, LV_PART_TEXTAREA_PLACEHOLDER);
+    /* 光标用青色，聚焦时描边变青，提示"这里可以打字" */
+    lv_obj_set_style_bg_color(s_kb_ta, COL_CYAN, LV_PART_CURSOR);
+    lv_obj_set_style_bg_opa(s_kb_ta, LV_OPA_COVER, LV_PART_CURSOR);
+    lv_obj_set_style_border_color(s_kb_ta, COL_CYAN, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(s_kb_ta, 2, LV_STATE_FOCUSED);
+
+    /* ---- 输入提示（放在输入框和候选条之间，说明怎么打中文）---- */
+    lv_obj_t *kbhint = lv_label_create(s_kb_root);
+    lv_label_set_text_static(kbhint, "英文可直接发送；中文先打拼音，再点候选字");
+    lv_obj_set_style_text_color(kbhint, COL_SUBTEXT, 0);
+    lv_obj_set_style_text_font(kbhint, pet_font(), 0);
+    lv_obj_align(kbhint, LV_ALIGN_TOP_LEFT, 2, 124);
+
+    /* ---- 键盘：略矮一点（240→210）给顶部腾出间距 ----
+     * 默认浅色主题的按键是白底黑字，这里统一改成 COL_CARD 深卡片风，
+     * 按下闪边、选中（如 abc 切换）用青色高亮，和候选条保持同一套配色。 */
     s_kb = lv_keyboard_create(s_kb_root);
-    lv_obj_set_size(s_kb, 760, 240);
+    lv_obj_set_size(s_kb, 776, 210);
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(s_kb, COL_TABBAR, 0);
+    lv_obj_set_style_bg_opa(s_kb, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_kb, 0, 0);
+    lv_obj_set_style_radius(s_kb, 14, 0);
+    lv_obj_set_style_pad_all(s_kb, 6, 0);
+    lv_obj_set_style_pad_row(s_kb, 4, 0);
+    lv_obj_set_style_pad_column(s_kb, 4, 0);
+    lv_obj_set_style_bg_color(s_kb, COL_CARD, LV_PART_ITEMS);
+    lv_obj_set_style_bg_opa(s_kb, LV_OPA_COVER, LV_PART_ITEMS);
+    lv_obj_set_style_text_color(s_kb, COL_TEXT, LV_PART_ITEMS);
+    lv_obj_set_style_border_width(s_kb, 0, LV_PART_ITEMS);
+    lv_obj_set_style_radius(s_kb, 8, LV_PART_ITEMS);
+    lv_obj_set_style_bg_color(s_kb, COL_BORDER, LV_PART_ITEMS | LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(s_kb, COL_CYAN, LV_PART_ITEMS | LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(s_kb, COL_DARK, LV_PART_ITEMS | LV_STATE_CHECKED);
+    /* 同上：buttonmatrix 默认也带 SCROLLABLE，行高/间距取整后哪怕溢出 1 px，
+     * 手指在按键上的拖动就会被当成滚动并吃掉 CLICKED ⇒ 关掉。 */
+    lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_SCROLLABLE);
     lv_keyboard_set_textarea(s_kb, s_kb_ta);
     lv_obj_add_event_cb(s_kb, kb_ready_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_kb, kb_cancel_cb, LV_EVENT_CANCEL, NULL);
@@ -1242,9 +1346,10 @@ void pet_overlay_init(void)
      *   3) 候选条默认高 5%（480 屏只有 24 px），装不下 28 px 的汉字，需显式改尺寸。 */
     s_ime = lv_ime_pinyin_create(s_kb_root);
     lv_ime_pinyin_set_keyboard(s_ime, s_kb);
-    /* ★ 2026-11-11 简体候选：LVGL 自带的 lv_ime_pinyin_def_dict 是繁体字表
-     *   （"shuo"→数説說、"men"→們、"zhe"→者這），候选出来全是繁体。
-     *   这里换成由它逐串 t2s 转好的简体表（保留原频率排序）。
+    /* ★ 简体候选表（2026-11-12 扩容）：LVGL 自带的 lv_ime_pinyin_def_dict 是繁体，
+     *   且每个音节只有 1~10 个字、大量音节根本没有条目 —— 用户实测"能打的字太少"。
+     *   这里换成 g_pinyin_dict_simp：GB2312 全集 6763 汉字 × 405 个音节，
+     *   字内按词频排序（第一页就是高频字），多音字按现代汉语读音挂到多个音节。
      *   注意：set_dict 只存指针不拷贝，数组必须是静态只读且活到 UI 销毁之后。 */
     {
         extern const lv_pinyin_dict_t g_pinyin_dict_simp[];
@@ -1252,9 +1357,13 @@ void pet_overlay_init(void)
     }
     lv_obj_set_style_text_font(s_ime, pet_font(), 0);
     lv_obj_t *cand = lv_ime_pinyin_get_cand_panel(s_ime);
-    lv_obj_set_size(cand, 760, 48);
-    lv_obj_align_to(cand, s_kb, LV_ALIGN_OUT_TOP_MID, 0, -6);
+    /* 和键盘等宽、贴着键盘上沿 8 px；高 48 才能放下 28 px 汉字 */
+    lv_obj_set_size(cand, 776, 48);
+    lv_obj_align_to(cand, s_kb, LV_ALIGN_OUT_TOP_MID, 0, -8);
     lv_obj_set_style_text_font(cand, pet_font(), 0);
+    /* 候选条也是 buttonmatrix（默认 SCROLLABLE）：手指点候选字时带一点点拖动
+     * 就会被判成滚动，候选条的 VALUE_CHANGED 不触发 ⇒ "候选点了没反应"。 */
+    lv_obj_clear_flag(cand, LV_OBJ_FLAG_SCROLLABLE);
     /* ★★ 候选字颜色必须设在 **LV_PART_ITEMS**，设在 part 0 上等于没设
      *   （用户报的"候选文字黑色的看不清"就是这一条）：
      *   候选条本体是 `lv_buttonmatrix`，它在
@@ -1288,6 +1397,19 @@ void pet_overlay_init(void)
     /* ---- 事件队列 + 轮询 + 按键注册 ---- */
     s_evt_q = xQueueCreate(PET_EVT_Q_DEPTH, sizeof(pet_evt_msg_t));
     s_timer = lv_timer_create(pet_timer_cb, 50, NULL);
+
+    /* ★ 触摸采样提速：LVGL 的 indev 读定时器周期默认 = LV_DEF_REFR_PERIOD（33 ms）
+     *   （lv_indev.c:105）。而 RGB direct 模式每刷一帧要整屏搬 768 KB 并等 VSYNC，
+     *   LVGL 线程偶尔被占住 100~200 ms ⇒ 一次 60 ms 的快点可能**整个落在两次采样
+     *   之间**，用户看到的就是"点了没反应"。这里把采样提到 ~15 ms（66 Hz），
+     *   I2C 读一次 <0.5 ms，代价可忽略。 */
+    for (lv_indev_t *ind = lv_indev_get_next(NULL); ind != NULL; ind = lv_indev_get_next(ind)) {
+        lv_timer_t *rt = lv_indev_get_read_timer(ind);
+        if (rt) {
+            lv_timer_set_period(rt, 15);
+        }
+    }
+
     xiaozhi_service_set_evt_cb(on_xz_evt);
     button_service_set_evt_cb(pet_overlay_key_feed);
 

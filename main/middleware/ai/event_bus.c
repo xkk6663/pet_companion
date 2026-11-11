@@ -209,9 +209,16 @@ void event_bus_on_line(const char *line)
             char abs[256];
             abs_url(url->valuestring, abs, sizeof(abs));
             cJSON *dur = cJSON_GetObjectItem(root, "duration_ms");
-            ESP_LOGI(TAG, "audio <- %s (%d ms)", abs,
-                     cJSON_IsNumber(dur) ? dur->valueint : 0);
-            esp_err_t err = xiaozhi_service_cloud_audio_play(abs);
+            /* ★ 2026-11-11 §40：网关把"这一句的原文"塞进 audio 帧一起下发。
+             *   设备不让它立刻显示，而是**跟着这条 TTS 排队**，等它真正起播
+             *   时才抛 XZ_EVT_TEXT ⇒ 一句一个气泡，文字和声音对齐。
+             *   没有这个字段时行为与旧版完全一致（text=NULL）。 */
+            cJSON *tx = cJSON_GetObjectItem(root, "text");
+            const char *sent = cJSON_IsString(tx) ? tx->valuestring : NULL;
+            ESP_LOGI(TAG, "audio <- %s (%d ms) %s", abs,
+                     cJSON_IsNumber(dur) ? dur->valueint : 0,
+                     (sent != NULL) ? "with text" : "");
+            esp_err_t err = xiaozhi_service_cloud_audio_play_ex(abs, sent);
             if (err != ESP_OK) {
                 ESP_LOGW(TAG, "audio play rejected: %s", esp_err_to_name(err));
             }

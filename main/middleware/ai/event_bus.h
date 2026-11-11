@@ -13,7 +13,8 @@
  *
  *   {"type":"text"}     → XZ_EVT_TEXT(role=assistant)     → 气泡 + 对话记录
  *   {"type":"emotion"}  → XZ_EVT_EMOJI                    → 桌宠表情状态机
- *   {"type":"audio"}    → xiaozhi_service_cloud_audio_play → 喇叭 + 嘴型
+ *   {"type":"audio"}    → xiaozhi_service_cloud_audio_play_ex（可选带 "text"，
+ *                         该句起播时才显示 ⇒ 文字与声音对齐，§40）→ 喇叭 + 嘴型
  *   {"type":"image"}    → cloud_media_service_fetch        → /sdcard/cloud_media + 图片卡
  *   {"type":"system"}   → reboot / set_volume / command_table /
  *                         explain / capture / punch / light（S9 §3.5 的 WS 等价物）
