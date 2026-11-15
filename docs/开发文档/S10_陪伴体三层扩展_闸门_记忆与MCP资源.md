@@ -895,11 +895,11 @@ curl -s -X POST http://127.0.0.1:8081/memory/resources/read \
 4. **D1/D2 仍未拍板，D6 已落地**：监听时段（当前全天可监听，开关控制）、断网编码
    （当前 WAV 兜底，OPUS 未迁）；音频/原始转写保留期已按默认 30/180 天落地，
    `pet-memory-retention.timer` 每天 03:30 执行，可通过环境变量调整。
-5. **已编译、已烧录，但未提交 git**：2026-11-15 用 ESP-IDF v6.1 构建
+5. **已编译、已烧录，并已本地提交**：2026-11-15 用 ESP-IDF v6.1 构建
    `build/display_audio_photo.bin`（最新 `0x785c50`，7,887,952 B），
    `idf.py -p COM9 -b 921600 app-flash` 整包写入 7,887,952 B，
    `Hash of data verified` / `Done`（`build/idf_app_flash_pttfix_full.log`）。
-   代码仍在工作区，未执行 `git commit`。
+   本次整理后已做本地提交 `fe0e4c3`（未推送远端）。
 6. **历史事件时区已修，raw 被一次性重写**：`slice_client.c` 修好 `%2B` 之前落盘的 106 行
    `ts` 是 `" ... 08:00"`；已用 `tools/memory/fix_ts.py` 原地修复，并留
    `/opt/pet_memory/raw/20261115/events.jsonl.bak_tsfix_20261115T080251Z` 备份。
