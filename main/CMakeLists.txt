@@ -3,6 +3,8 @@ idf_component_register(SRCS
                         "middleware/audio/audio_service.c"
                         ## ---- 双麦前端（BSS 直通 / GSC 波束成形）----
                         "middleware/audio/mic_frontend.c"
+                        ## ---- REC 双麦可视化：RMS/dBFS + 32 频带 FFT + 本地 VAD 代理 ----
+                        "middleware/audio/mic_monitor.c"
                         ## ---- S10 P1/P4：VAD 常开闸门（默认关闭）+ 事件切片上行 ----
                         "middleware/audio/mic_gate.c"
                         "middleware/ai/slice_client.c"

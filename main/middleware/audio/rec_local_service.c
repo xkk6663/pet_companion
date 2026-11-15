@@ -29,6 +29,7 @@
 #include "audio_service.h"
 #include "media_player_service.h"
 #include "mic_gate.h"
+#include "mic_monitor.h"      /* REC 双麦频域/响度可视化：录音块旁路投递 */
 #include "rec_local_service.h"
 #include "middleware/mem_diag.h"
 #include "middleware/periph/sdcard_service.h"
@@ -77,7 +78,7 @@ static char s_last_path[REC_PATH_MAX];
 static bool s_last_ok;
 
 /* 任务私有（单实例任务串行使用，无需保护） */
-static uint8_t s_pcm[REC_CHUNK];
+static uint8_t s_pcm[REC_CHUNK] __attribute__((aligned(4)));
 static uint8_t s_file_buf[4096];
 
 /* ---- 前向 ---- */
@@ -284,6 +285,10 @@ static void do_record(void)
             io_error = true;
             break;
         }
+        /* 可视化旁路：只投递这一块，不参与落盘；队列满时 monitor 自己丢帧，
+         * 绝不反压录音。sizeof(s_pcm)/4 = 2ch/16bit 的帧数（512）。 */
+        mic_monitor_ingest((const int16_t *)(const void *)s_pcm,
+                           (int)(sizeof(s_pcm) / (2 * sizeof(int16_t))));
         size_t w = fwrite(s_pcm, 1, sizeof(s_pcm), f);
         if (w != sizeof(s_pcm)) {
             ESP_LOGE(TAG, "fwrite short: %u/%u (disk full?) -> stop, %u KB total",

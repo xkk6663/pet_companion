@@ -22,6 +22,7 @@
 #include "ui/overlay_manager.h"
 #include "ui/ui_binfont.h"
 #include "middleware/audio/audio_service.h"
+#include "middleware/audio/mic_monitor.h"   /* ★ REC 双麦频域/响度可视化后端 */
 #include "middleware/audio/rec_local_service.h"
 #include "middleware/audio/media_player_service.h"
 #include "middleware/audio/mic_gate.h"      /* S10 P1：VAD 常开闸门（默认关闭） */
@@ -863,6 +864,10 @@ void app_main(void)
     MEM_STAGE(TAG, "after fs_service_init");
     audio_service_init();
     MEM_STAGE(TAG, "after audio_service_init");
+    if (mic_monitor_init() != ESP_OK) {
+        ESP_LOGW(TAG, "mic_monitor init failed (REC visual disabled)");
+    }
+    MEM_STAGE(TAG, "after mic_monitor_init");
     rec_local_service_init();   /* ★ §40 本地录音（ext EXCLUSIVE mic 租借） */
     MEM_STAGE(TAG, "after rec_local_service_init");
 

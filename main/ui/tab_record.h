@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include "lvgl.h"
 
 #ifdef __cplusplus
@@ -20,6 +21,7 @@ extern "C" {
 #endif
 
 void tab_record_build(lv_obj_t *screen, lv_group_t *group);
+void tab_record_set_active(bool active);
 void tab_record_destroy(void);
 
 #ifdef __cplusplus

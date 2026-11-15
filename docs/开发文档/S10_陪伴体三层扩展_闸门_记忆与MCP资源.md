@@ -1567,6 +1567,24 @@ LLM 复盘和微信推送。
 - 本次验证写入 2 条测试事件（`19:16:37/42`，文本“测试第二句合并测试。”）；
   尚未清理，正式报告前需要过滤或清掉。
 
+## 13.14 REC 双麦采集状态可视化（2026-11-15）
+
+- 新增 `main/middleware/audio/mic_monitor.c/.h`：256 点 FFT + Hann，
+  32 个对数频带（100 Hz~8 kHz），L/R RMS→dBFS，快照供 LVGL 读取。
+  FFT 为代码内软件 radix-2，频带 dB 归一化到 PCM 满量程 32768；
+  频谱柱显示范围 -70~-35 dBFS，dB 文本仍为真实全量程。
+- 采集点：监听态走 `mic_frontend.c` 的 `diag_scan_stereo()`；
+  REC 本地录音走 `rec_local_service.c` 的 `esp_codec_dev_read()` 旁路。
+- 线程：`mic_mon` 独立任务（4096 B 栈、优先级 3）；ingest 非阻塞，
+  PSRAM 3 slot，满则丢帧，不反压录音/AFE。
+- VAD：`mic_gate_vad_state()` 提供 `UNKNOWN/SILENCE/SPEECH/MERGE`；
+  REC 录音态 gate 已 yield，UI 显示本地 RMS 代理 `VAD: LOCAL`，
+  不冒充 AFE 内部阈值。
+- UI：REC 页左下 L、右下 R 两组竖排频谱柱；中间 REC/STOP + 时长；
+  右上 VAD pill。仅 REC tab 可见时启动 50ms timer 与 monitor。
+- 边界：不改变 REC WAV 数据路径；AFE 内部 VAD 阈值不可见，UI 只显示状态，
+  不伪造数值。
+
 ---
 
 > **一句话收尾**：这套骨架不缺"能力"，缺的是"决定什么进来"和"进来之后记住什么"。

@@ -62,6 +62,7 @@ static int64_t       s_vad_end_us;
 static int64_t       s_slice_start_us;
 static volatile bool s_merge_pending;
 static int64_t       s_block_until_us;
+static volatile mic_gate_vad_state_t s_vad_state = MIC_GATE_VAD_UNKNOWN;
 
 static void gate_event_cb(audio_recorder_handle_t recorder, void *event, void *ctx) {
     (void)recorder;
@@ -73,6 +74,7 @@ static void gate_event_cb(audio_recorder_handle_t recorder, void *event, void *c
     if (evt->type == ESP_GMF_AFE_EVT_VAD_START) {
         int64_t now = esp_timer_get_time();
         s_vad_start_us = now;
+        s_vad_state = MIC_GATE_VAD_SPEECH;
         if (s_merge_pending && slice_client_gate_active()) {
             /* VAD_END 后的合并窗口内又说话了：继续同一段，不重新开切片 */
             s_merge_pending = false;
@@ -91,8 +93,11 @@ static void gate_event_cb(audio_recorder_handle_t recorder, void *event, void *c
             /* 不立即收口：先留 GATE_MERGE_MS 的合并窗口 */
             s_vad_end_us = esp_timer_get_time();
             s_merge_pending = true;
+            s_vad_state = MIC_GATE_VAD_MERGE;
             ESP_LOGI(TAG, "vad_end %lldms -> merge window %dms",
                      (long long)dur_ms, GATE_MERGE_MS);
+        } else {
+            s_vad_state = MIC_GATE_VAD_SILENCE;
         }
     }
 }
@@ -134,6 +139,7 @@ static void gate_task(void *arg) {
             s_vad_end_us = 0;
             slice_client_gate_end();
             s_slice_start_us = 0;
+            s_vad_state = MIC_GATE_VAD_SILENCE;
             ESP_LOGI(TAG, "merge window closed -> slice");
         }
         /* 长段强制收口：单切片上限 30 s（云端 4 MB 口也扛得住，但语义上够了） */
@@ -144,6 +150,7 @@ static void gate_task(void *arg) {
             s_merge_pending = false;
             s_vad_end_us = 0;
             s_slice_start_us = 0;
+            s_vad_state = MIC_GATE_VAD_SILENCE;
         }
     }
     s_task = NULL;
@@ -172,6 +179,7 @@ static void gate_cleanup(bool release_lease) {
     if (release_lease) {
         audio_service_ext_release_exclusive();
     }
+    s_vad_state = MIC_GATE_VAD_UNKNOWN;
     s_owner = false;
 }
 
@@ -264,6 +272,7 @@ static bool gate_start_pipeline(void) {
     }
 
     s_owner = true;
+    s_vad_state = MIC_GATE_VAD_SILENCE;
     ESP_LOGI(TAG, "listening: %s layout=%s", mic_fe_mode_name(), mic_fe_layout());
     return true;
 }
@@ -326,6 +335,8 @@ void mic_gate_set_enabled(bool on) {
 }
 
 bool mic_gate_is_owner(void) { return s_owner; }
+
+mic_gate_vad_state_t mic_gate_vad_state(void) { return s_vad_state; }
 
 bool mic_gate_yield(uint32_t timeout_ms) {
     if (!s_owner && s_task == NULL) {

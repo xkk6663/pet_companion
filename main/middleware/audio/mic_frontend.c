@@ -71,6 +71,7 @@
 #include "esp_heap_caps.h"
 
 #include "mic_frontend.h"
+#include "mic_monitor.h"     /* REC 双麦可视化：复用原始 L/R 采样 */
 #include "esp_gsc.h"        /* esp_gsc_create/process/destroy（esp-sr, S31 有导出） */
 
 static const char *TAG = "MIC_FE";
@@ -564,7 +565,15 @@ static void diag_scan_stereo(const int16_t *ilv, int frames)
 {
     /* ★ TTS 期间整段跳过：不读样本、不算浮点、不打日志、不碰 5 s 定时器。
      *   此时 mic 收到的是喇叭回声，corr 恒为负，本来也没有诊断价值。 */
-    if (!s_cfg.diag || frames <= 0 || s_diag_hold) {
+    if (frames <= 0 || s_diag_hold) {
+        return;
+    }
+
+    /* REC 页可视化：消费原始双路（BSS/MONO/GSC 都在这里过一遍）。
+     * 必须在 s_cfg.diag 判断之前 —— 关掉 5 s 日志诊断不应连带关掉 UI。 */
+    mic_monitor_ingest(ilv, frames);
+
+    if (!s_cfg.diag) {
         return;
     }
     int n = frames > 1024 ? 1024 : frames;

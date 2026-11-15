@@ -33,6 +33,7 @@ static lv_obj_t  *s_tab_btns;
 static uint32_t   s_tab_vid_idx = 1;    /* VIDEO 页下标：建页时按实际顺序算出（见 main_create） */
 static uint32_t   s_tab_files_idx = 2;  /* FILES 页下标（S4 文件管理，同上） */
 static uint32_t   s_tab_music_idx = 3;  /* MUSIC 页下标（本地播放 / 蓝牙推流） */
+static uint32_t   s_tab_rec_idx = 4;    /* REC 页下标（录音 + 双麦可视化） */
 static lv_group_t *s_group_sys;
 
 /* ★★ tab 绑定的后台动作（取景流 / 文件管理页 / 本地播放页）都写在这里。
@@ -46,9 +47,11 @@ static void sync_tab_side_effects(void)
     bool vid_act   = (lv_tabview_get_tab_active(s_tabview) == s_tab_vid_idx);
     bool files_act = (lv_tabview_get_tab_active(s_tabview) == s_tab_files_idx);
     bool music_act = (lv_tabview_get_tab_active(s_tabview) == s_tab_music_idx);
+    bool rec_act   = (lv_tabview_get_tab_active(s_tabview) == s_tab_rec_idx);
     tab_video_set_active(vid_act);
     tab_files_set_active(files_act);
     tab_music_set_active(music_act);
+    tab_record_set_active(rec_act);
     page_main_refresh_group();
 }
 
@@ -93,6 +96,7 @@ static lv_obj_t *main_create(lv_obj_t *parent)
     lv_obj_t *tab_music = lv_tabview_add_tab(s_tabview, LV_SYMBOL_AUDIO"  MUSIC");
     s_tab_music_idx = lv_tabview_get_tab_count(s_tabview) - 1;
     lv_obj_t *tab_rec  = lv_tabview_add_tab(s_tabview, LV_SYMBOL_AUDIO"  REC");
+    s_tab_rec_idx = lv_tabview_get_tab_count(s_tabview) - 1;
     lv_obj_t *tab_sys  = lv_tabview_add_tab(s_tabview, LV_SYMBOL_SETTINGS"  SYS");
 
     /* Tab bar styling */
