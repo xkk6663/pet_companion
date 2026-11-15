@@ -480,6 +480,7 @@ tools/music_proxy/            点歌音源代理（Docker）
 - [架构分析](docs/开发文档/架构分析.md) —— 端云分层、回合时序、caps 协议、媒体协同
 - [云端网关开发文档](docs/开发文档/S9_云端网关_开发文档.md) —— 接口契约、AstrBot 对接硬约束、插件开发
 - [通信接口规范 ICD](docs/开发文档/通信接口规范_ICD.md) —— 帧格式与字段级定义
+- [S10 陪伴体三层扩展](docs/开发文档/S10_陪伴体三层扩展_闸门_记忆与MCP资源.md) —— 闸门（VAD 事件切片）、记忆（append-only 事件流）与 MCP resources：P0/P3/P5/P6 已实施，P1/P2/P4 默认关闭待实机验收（工具见 [tools/memory](tools/memory/README.md)）
 - [工程规范](docs/工程规范/) —— 分层 / 命名 / 注释 / 代码风格 / 问题复盘
 - [开发文档](docs/开发文档/) —— 蓝牙 A2DP 移植、内存优化、点歌、人脸、AI 浮窗
 - [项目规划](docs/项目规划/) —— 需求文档、todolist、改动记录（§ 编号可追溯）

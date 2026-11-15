@@ -924,6 +924,291 @@ async def upload_image(session_id: str, request: Request):
     return {"attachment_id": aid, "bytes": len(body)}
 
 
+# ---------------------------------------------------------------- 记忆：事件切片（S10 P3/P4）
+# 设备端"在线直推"的落点：raw body（audio/wav 或裸 PCM）→ ASR → 追加一行原始事件。
+# ★ 目录可用 PET_MEMORY_DIR 覆盖；不可写时退到 tools/diag/memory（本地自测用）。
+MEMORY_DIR = Path(os.environ.get("PET_MEMORY_DIR", "/opt/pet_memory"))
+try:
+    (MEMORY_DIR / "raw").mkdir(parents=True, exist_ok=True)
+    (MEMORY_DIR / "audio").mkdir(parents=True, exist_ok=True)
+    (MEMORY_DIR / "derived").mkdir(parents=True, exist_ok=True)
+except OSError as _exc:  # noqa: BLE001
+    log.warning("PET_MEMORY_DIR 不可写(%s)，退到本地 memory/", _exc)
+    MEMORY_DIR = BASE_DIR / "memory"
+    for _d in ("raw", "audio", "derived"):
+        (MEMORY_DIR / _d).mkdir(parents=True, exist_ok=True)
+
+RAW_DIR = MEMORY_DIR / "raw"
+AUDIO_DIR = MEMORY_DIR / "audio"
+SLICE_LOCK = asyncio.Lock()
+
+
+def slice_day(ts: str) -> str:
+    """从 ISO8601 里取 YYYYMMDD；缺失/非法则用服务器本地日期。"""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", ts or "")
+    if m:
+        return f"{m.group(1)}{m.group(2)}{m.group(3)}"
+    return time.strftime("%Y%m%d")
+
+
+def find_event(raw_path: Path, slice_id: str):
+    """返回 (是否存在, text)。只扫当天文件，量级可控。"""
+    try:
+        for line in raw_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            ev = json.loads(line)
+            if ev.get("id") == slice_id:
+                return True, ((ev.get("asr") or {}).get("text") or "")
+    except FileNotFoundError:
+        return False, ""
+    except Exception as exc:  # noqa: BLE001
+        log.warning("读 raw 失败 %s: %s", raw_path, exc)
+        return False, ""
+    return False, ""
+
+
+@app.post("/slice/{session_id}")
+async def upload_slice(session_id: str, request: Request,
+                       id: str = "", dur_ms: int = 0, ts: str = ""):
+    """设备事件切片上行（ASR-only，不触发对话）。
+
+    请求：raw body = WAV（推荐）或裸 PCM；query: id / dur_ms / ts(ISO8601)
+    返回：{"ok":true,"id":..,"text":..,"duplicate":false,"bytes":n}
+    幂等：同 id 已写进当天 raw ⇒ 直接回 ACK，不重复转写、不重复落盘。
+    """
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="空请求体")
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"切片过大 {len(body)} B")
+
+    sid = safe_name(id or f"evt_{uuid.uuid4().hex[:12]}", "")
+    day = slice_day(ts)
+    raw_path = RAW_DIR / day / "events.jsonl"
+    audio_path = AUDIO_DIR / day / f"{sid}.wav"
+
+    async with SLICE_LOCK:
+        found, old_text = find_event(raw_path, sid)
+    if found:
+        log.info("[%s] slice %s duplicate, skip", session_id, sid)
+        return {"ok": True, "id": sid, "text": old_text, "duplicate": True, "bytes": len(body)}
+
+    # 1) 转写（WAV 先剥头；不是 WAV 就当裸 PCM 16k/mono/s16）
+    text = ""
+    if CONFIG.get("asr_enabled", True):
+        try:
+            if body[:4] == b"RIFF":
+                with wave.open(io.BytesIO(body), "rb") as wr:
+                    pcm = wr.readframes(wr.getnframes())
+                    rate = wr.getframerate()
+            else:
+                pcm, rate = body, 16000
+            text = await stt_transcribe(pcm, rate)
+        except Exception as exc:  # noqa: BLE001
+            # 转写失败不算丢数据：音频照样落盘，夜间轨会补算
+            log.warning("[%s] slice %s ASR 失败: %s", session_id, sid, exc)
+
+    # 2) 落盘（音频先写 .part 再 rename；jsonl 只追加）
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = audio_path.with_suffix(".part")
+    tmp.write_bytes(body)
+    tmp.replace(audio_path)
+
+    ev = {
+        "id": sid,
+        "ts": ts or time.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+        "kind": "speech",
+        "source": "mic.gate",
+        "site": "desk",
+        "dur_ms": int(dur_ms or 0),
+        "audio": f"audio/{day}/{sid}.wav",
+        "asr": {"text": text, "model": "SenseVoiceSmall", "pipeline": "online"},
+        "session": safe_name(session_id, ""),
+        "schema": 1,
+    }
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    async with SLICE_LOCK:
+        # 双检：并发重传时只让第一条写进去
+        found2, _ = find_event(raw_path, sid)
+        if not found2:
+            with open(raw_path, "a", encoding="utf-8") as fp:
+                fp.write(json.dumps(ev, ensure_ascii=False) + "\n")
+                fp.flush()
+                os.fsync(fp.fileno())
+
+    log.info("[%s] slice %s %u B %dms -> %s", session_id, sid, len(body),
+             int(dur_ms or 0), (text[:40] + "…") if len(text) > 40 else text)
+    return {"ok": True, "id": sid, "text": text, "duplicate": False, "bytes": len(body)}
+
+
+# ---------------------------------------------------------------- 记忆：查询（S10 P6）
+def _iter_days(date_from: str, date_to: str):
+    """把 YYYY-MM-DD / YYYYMMDD 的闭区间展开成天列表（最多 31 天）。"""
+    from datetime import date, datetime, timedelta
+    def parse(s: str) -> date:
+        s = (s or "").replace("-", "")
+        if len(s) == 8:
+            return datetime.strptime(s, "%Y%m%d").date()
+        return date.today()
+    a, b = parse(date_from), parse(date_to)
+    if b < a:
+        a, b = b, a
+    n = (b - a).days
+    if n > 31:
+        a = b - timedelta(days=31)
+    out = []
+    while a <= b:
+        out.append(a.strftime("%Y%m%d"))
+        a += timedelta(days=1)
+    return out
+
+
+def load_day_events(day: str) -> list:
+    """读一天 raw，并把 annotation 合并成覆盖值（原始行不改）。"""
+    path = RAW_DIR / day / "events.jsonl"
+    if not path.is_file():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:  # noqa: BLE001
+            continue
+    by_id = {r.get("id"): r for r in rows if r.get("kind") != "annotation"}
+    for r in rows:
+        if r.get("kind") == "annotation" and r.get("target") in by_id and r.get("field"):
+            tgt = by_id[r["target"]]
+            tgt.setdefault("_ann", {})[r["field"]] = r.get("value")
+    return [r for r in rows if r.get("kind") != "annotation"]
+
+
+@app.post("/memory/query")
+async def memory_query(payload: dict):
+    """给模型侧的唯一读入口（S10 D5）：结构化优先，返回带 built_from。
+
+    入参：{type: commitments|person|day|search, person?, q?, date_from?, date_to?, limit?}
+    出参：{ok, items:[{ts,kind,text,built_from}], stats:{events,speech_ms}}
+    """
+    qtype = (payload.get("type") or "day").strip()
+    date_from = payload.get("date_from") or time.strftime("%Y-%m-%d")
+    date_to = payload.get("date_to") or date_from
+    limit = int(payload.get("limit") or 50)
+    person = (payload.get("person") or "").strip()
+    q = (payload.get("q") or "").strip()
+
+    items, speech_ms = [], 0
+    for day in _iter_days(date_from, date_to):
+        for ev in load_day_events(day):
+            text = ((ev.get("asr") or {}).get("text") or "")
+            if ev.get("_ann", {}).get("asr.text"):
+                text = ev["_ann"]["asr.text"]
+            if ev.get("kind") == "speech":
+                speech_ms += int(ev.get("dur_ms") or 0)
+            if qtype == "person" and person:
+                tags = ev.get("tags") or []
+                if person not in text and f"person:{person}" not in tags:
+                    continue
+            if qtype == "search" and q and q not in text:
+                continue
+            items.append({
+                "id": ev.get("id"),
+                "ts": ev.get("ts"),
+                "kind": ev.get("kind"),
+                "text": text,
+                "audio": ev.get("audio"),
+                "built_from": [ev.get("id")],
+            })
+    items = items[-limit:]
+    return {
+        "ok": True,
+        "type": qtype,
+        "range": [date_from, date_to],
+        "stats": {"events": len(items), "speech_ms": speech_ms},
+        "items": items,
+    }
+
+
+# ---------------------------------------------------------------- 记忆：MCP resources 契约（S10 P6）
+# 资源是"向内的数据"，工具是"向外的手"。这里把记忆维度做成 resources，
+# 模型侧只保留**一条** pet_memory_query 工具（指向 /memory/query）：
+#   · 加一个记忆维度 = 加一个 resource，工具表不变；
+#   · AstrBot（或任何客户端）可以用 resources/read 直接读，不必改设备。
+MEMORY_RESOURCES = [
+    {
+        "uri": "memory://events",
+        "name": "事件流",
+        "description": "按时间范围读原始事件（语音/annotation），每条带 built_from",
+        "mimeType": "application/json",
+        "params": {"date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD", "q": "可选关键词"},
+    },
+    {
+        "uri": "memory://person",
+        "name": "人物视图",
+        "description": "按人物过滤事件与承诺（tags/文本命中）",
+        "mimeType": "application/json",
+        "params": {"person": "称呼", "date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD"},
+    },
+    {
+        "uri": "memory://commitments",
+        "name": "承诺库",
+        "description": "夜间抽取出的承诺，含 due/status/built_from",
+        "mimeType": "application/json",
+        "params": {"date_from": "YYYY-MM-DD", "date_to": "YYYY-MM-DD"},
+    },
+    {
+        "uri": "memory://day",
+        "name": "日报",
+        "description": "某天的统计与抽取结果（nightly/<day>.report.json）",
+        "mimeType": "application/json",
+        "params": {"date": "YYYYMMDD 或 YYYY-MM-DD"},
+    },
+]
+
+
+@app.get("/memory/resources")
+async def memory_resources():
+    """resources/list：契约层。客户端按 uri 决定怎么读。"""
+    return {"ok": True, "resources": MEMORY_RESOURCES}
+
+
+@app.post("/memory/resources/read")
+async def memory_resource_read(payload: dict):
+    """resources/read：uri + params → 内容。返回 MCP 风格的 contents 数组。"""
+    uri = (payload.get("uri") or "").strip()
+    params = payload.get("params") or {}
+    date_from = params.get("date_from") or time.strftime("%Y-%m-%d")
+    date_to = params.get("date_to") or date_from
+
+    if uri == "memory://commitments":
+        out = []
+        for day in _iter_days(date_from, date_to):
+            p = MEMORY_DIR / "nightly" / f"{day}.report.json"
+            if p.is_file():
+                try:
+                    out.extend(json.loads(p.read_text(encoding="utf-8")).get("commitments") or [])
+                except Exception:  # noqa: BLE001
+                    continue
+        data = out
+    elif uri == "memory://day":
+        day = (params.get("date") or date_from).replace("-", "")
+        p = MEMORY_DIR / "nightly" / f"{day}.report.json"
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail=f"no report for {day}")
+        data = json.loads(p.read_text(encoding="utf-8"))
+    else:
+        qtype = "person" if uri == "memory://person" else "search"
+        body = await memory_query({**params, "type": qtype,
+                                   "date_from": date_from, "date_to": date_to})
+        data = body
+
+    return {"ok": True,
+            "contents": [{"uri": uri, "mimeType": "application/json",
+                          "text": json.dumps(data, ensure_ascii=False)}]}
+
+
 # ---------------------------------------------------------------- 插件主动推送
 @app.post("/push")
 async def push(payload: dict):

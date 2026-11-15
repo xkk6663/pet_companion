@@ -1,0 +1,22 @@
+name: astrbot_plugin_pet_memory
+display_name: 每日转写、记忆与成长
+short_desc: 大肥鱼的记忆与成长入口 —— 查事件/人物/承诺，每晚生成成长摘要并推送评语
+desc: >-
+  把 pet_companion 云端已有的记忆链路（/slice 在线转写、夜间 nightly 抽取、
+  /memory/query、/memory/resources）收成 AstrBot 插件：
+  · 模型侧只多一条 pet_memory_query 工具；
+  · 指令侧提供 /记忆日报、/记忆查、/记忆人物、/记忆承诺；
+  · 可订阅每日日报，按设定时间主动推送；
+  · 成长模块读 report.json 生成 growth/<day>.json，注入人格上下文，
+    并按 /成长订阅 推送到微信；G4 人物关系网写入默认关闭；
+  · 插件关闭时显式 remove_func，工具真的从模型可用列表里消失。
+help: 发 /记忆 看查询状态，发 /成长 看成长模块；微信里发 /成长订阅 接收每晚评语。
+version: 1.1.0
+author: dafy
+repo: ""
+astrbot_version: ">=4.17.0"
+tags:
+  - 记忆
+  - 日报
+  - 转写
+  - 桌宠

@@ -24,6 +24,7 @@
 #include "middleware/audio/audio_service.h"
 #include "middleware/audio/rec_local_service.h"
 #include "middleware/audio/media_player_service.h"
+#include "middleware/audio/mic_gate.h"      /* S10 P1：VAD 常开闸门（默认关闭） */
 #include "middleware/bluetooth/bt_audio_service.h"   /* ★ A2DP Source 底座 */
 #include "middleware/bluetooth/bt_push_service.h"    /* ★ A2DP Source 推流管线 */
 #include "middleware/ai/xiaozhi_service.h"
@@ -909,6 +910,10 @@ void app_main(void)
     MEM_STAGE(TAG, "after media_player_service_init");
     xiaozhi_service_init();
     MEM_STAGE(TAG, "after xiaozhi_service_init");
+    /* ★ S10 P1：监听态。默认 MIC_GATE_ENABLE=0 ⇒ 只打一行 disabled，零行为变化；
+     *   置 1 后由监督任务在"会话空闲 + 无播放 + 无本地录音"时占麦做 VAD 切片。 */
+    mic_gate_init();
+    MEM_STAGE(TAG, "after mic_gate_init");
     /* ★ S2a/S2b：拍照与录像服务。两者都**不建常驻任务**
      *   （拍照/录像时才建一次性任务，收尾完即删），所以这里不占内部 RAM：
      *   - capture_service_init 只是把状态归零；

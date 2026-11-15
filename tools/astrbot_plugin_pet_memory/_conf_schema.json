@@ -1,0 +1,95 @@
+{
+  "enabled": {
+    "description": "启用记忆能力（注册 pet_memory_query 并响应查询指令）",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后工具会被摘除，raw 与日报数据保留；也可在 WebUI 直接关闭整个插件"
+  },
+  "gateway_base": {
+    "description": "pet-gateway 地址（AstrBot 容器内访问宿主机）",
+    "type": "string",
+    "default": "http://172.18.0.1:8081",
+    "hint": "容器到宿主机的 docker bridge 地址；不要填 127.0.0.1"
+  },
+  "request_timeout": {
+    "description": "单次请求超时（秒）",
+    "type": "int",
+    "default": 15,
+    "slider": {"min": 3, "max": 60, "step": 1}
+  },
+  "default_range_days": {
+    "description": "未指定范围时，查最近几天",
+    "type": "int",
+    "default": 7,
+    "slider": {"min": 1, "max": 31, "step": 1}
+  },
+  "max_items": {
+    "description": "单次最多返回/展示多少条",
+    "type": "int",
+    "default": 20,
+    "slider": {"min": 1, "max": 50, "step": 1}
+  },
+  "daily_push_enabled": {
+    "description": "启用每日日报主动推送",
+    "type": "bool",
+    "default": false
+  },
+  "daily_push_time": {
+    "description": "每日推送时间（HH:MM，服务器本地时区）",
+    "type": "string",
+    "default": "08:30"
+  },
+  "daily_push_targets": {
+    "description": "日报推送目标会话（unified_msg_origin）",
+    "type": "list",
+    "default": [],
+    "hint": "不用手填：在目标会话里发 /记忆订阅 会自动加入"
+  },
+  "growth_enabled": {
+    "description": "启用成长模块（每晚摘要、人格注入、微信评语）",
+    "type": "bool",
+    "default": true,
+    "hint": "独立开关；关闭后查询仍可用，已有成长摘要保留"
+  },
+  "growth_time": {
+    "description": "成长摘要生成与推送时间（HH:MM，服务器本地时区）",
+    "type": "string",
+    "default": "21:30",
+    "hint": "建议晚于晚间 nightly 定时器；默认 21:15 生成当天日报，21:30 推送"
+  },
+  "growth_push_enabled": {
+    "description": "启用成长评语微信推送",
+    "type": "bool",
+    "default": true
+  },
+  "growth_push_targets": {
+    "description": "成长评语推送目标会话（unified_msg_origin）",
+    "type": "list",
+    "default": [],
+    "hint": "不用手填：在微信会话里发 /成长订阅 会自动加入"
+  },
+  "growth_persona_id": {
+    "description": "用于生成评语的 persona_id",
+    "type": "string",
+    "default": "",
+    "hint": "留空时自动取 AstrBot personas 表里 system_prompt 最长的一条"
+  },
+  "growth_lookback_days": {
+    "description": "趋势回看天数",
+    "type": "int",
+    "default": 7,
+    "slider": {"min": 1, "max": 31, "step": 1}
+  },
+  "growth_max_chars": {
+    "description": "注入人格上下文的成长摘要最大字符数",
+    "type": "int",
+    "default": 1200,
+    "slider": {"min": 200, "max": 3000, "step": 100}
+  },
+  "growth_graph_write_enabled": {
+    "description": "G4：是否把稳定事实写入人物关系网（默认关）",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭；先验收摘要质量，再决定是否接 LivingMemory 官方 memorize"
+  }
+}

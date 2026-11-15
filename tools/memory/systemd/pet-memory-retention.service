@@ -1,0 +1,12 @@
+[Unit]
+Description=Pet memory retention cleanup (audio/raw)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PET_MEMORY_DIR=/opt/pet_memory
+Environment=PET_AUDIO_RETENTION_DAYS=30
+Environment=PET_RAW_RETENTION_DAYS=180
+ExecStart=/opt/pet_gateway/.venv/bin/python /opt/pet_memory/bin/retention.py --apply
+Nice=10

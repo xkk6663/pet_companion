@@ -44,6 +44,9 @@
 - [x] WIFI 子页扫描 + LVGL 键盘（SSID/密码明文）；实测 `got ip: 10.241.126.252`（AP：Power）；
 - [x] 双回调槽 sys_cb→LED 状态灯（未连红/连接中蓝/已连绿，BSP_LED_BREATHE_SLOW）；
 - [x] led_service 命令队列化修复并发 Cache error；RGB 子页手动常亮控制；改动记录 9.9。
+- [x] 呼吸灯改用「绝对 UTC 同步」（`middleware/periph/breath_sync.c/h`）：状态色呼吸多机同相，
+      **不再使用 `BSP_LED_BREATHE_SLOW`**（相位出自本机 uptime，天然不同相）；手动调色仍常亮；
+      改动记录 §44（2026-11-15）。
 
 ---
 

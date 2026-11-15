@@ -43,6 +43,7 @@
 
 #include "media_player_service.h"
 #include "audio_service.h"
+#include "mic_gate.h"
 #include "middleware/bluetooth/bt_audio_service.h"
 #include "middleware/bluetooth/bt_push_service.h"
 
@@ -557,6 +558,9 @@ esp_err_t media_player_service_play(const char *path)
     if (!path || !path[0] || !s_cmd_q) {
         return ESP_ERR_INVALID_ARG;
     }
+    /* S10 P1：播放要独占 spk，先让监听态收口（默认关闭时是空操作） */
+    (void)mic_gate_yield(300);
+    mic_gate_block(5000);        /* 给 mp_task 留出 claim 的窗口 */
     mp_cmd_t cmd = { .id = MP_CMD_PLAY };
     if (strlen(path) >= sizeof(cmd.path)) {
         return ESP_ERR_INVALID_SIZE;

@@ -3,6 +3,9 @@ idf_component_register(SRCS
                         "middleware/audio/audio_service.c"
                         ## ---- 双麦前端（BSS 直通 / GSC 波束成形）----
                         "middleware/audio/mic_frontend.c"
+                        ## ---- S10 P1/P4：VAD 常开闸门（默认关闭）+ 事件切片上行 ----
+                        "middleware/audio/mic_gate.c"
+                        "middleware/ai/slice_client.c"
                         "middleware/audio/rec_local_service.c"
                         "middleware/audio/media_player_service.c"
                         ## ---- A2DP Source 移植：蓝牙底座 + 推流管线 + LRC 解析 ----
@@ -32,6 +35,8 @@ idf_component_register(SRCS
                         "middleware/periph/fs_service.c"
                         "middleware/periph/sdcard_service.c"
                         "middleware/periph/led_service.c"
+                        ## ---- 同步呼吸灯：跨设备同相（亮度是绝对 UTC 的纯函数）----
+                        "middleware/periph/breath_sync.c"
                         "middleware/periph/button_service.c"
                         ## ---- 2026-11-01：编译期静态内部内存池（关键短任务栈不再吃堆）----
                         "middleware/mem/static_pool.c"
@@ -100,6 +105,10 @@ idf_component_register(SRCS
                                     ##   组件已在依赖树里（esp_websocket_client v1.8.0），这里只声明依赖
                                     esp_websocket_client
                                     esp_http_client esp_http_server cjson mbedtls zlib esp_video esp_cam_sensor esp32_s31_korvo_1
+                                    ## ★ 同步呼吸灯：led_service 直接驱动 WS2812（不再走 led_indicator 的
+                                    ##   blink 引擎），需要 led_strip 的 set_pixel/refresh。
+                                    ##   写全名（managed component 的注册名），不依赖短名别名
+                                    espressif__led_strip
                                     esp_driver_jpeg
                                     ## ★ §73.27：esp_crt_bundle.h 在 esp-tls（点歌搜索 TLS 验证）
                                     ## ---- §60 异族模型（vendor 本地组件，SDCARD 模式）----

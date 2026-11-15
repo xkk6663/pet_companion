@@ -28,6 +28,7 @@
 
 #include "audio_service.h"
 #include "media_player_service.h"
+#include "mic_gate.h"
 #include "rec_local_service.h"
 #include "middleware/mem_diag.h"
 #include "middleware/periph/sdcard_service.h"
@@ -109,6 +110,9 @@ esp_err_t rec_local_start(void)
     if (s_cmd_q == NULL || s_active) {
         return ESP_ERR_INVALID_STATE;
     }
+    /* S10 P1：本地录音与监听态互斥，先让 gate 归还独占租约 */
+    (void)mic_gate_yield(300);
+    mic_gate_block(10000);
     /* ★ 先清 stop 标志**再入队**：xQueueSend 会立刻唤醒 rec_task（双核下另一核
      *   可能抢先跑），若先入队后清标志，task 会看到上一轮 stop 残留的 true 而
      *   误判"pending 期间被 stop"→ 秒取消。实测（2026-09-26）：第二条录不了，

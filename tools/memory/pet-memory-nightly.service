@@ -1,0 +1,12 @@
+[Unit]
+Description=Pet companion nightly memory extraction
+After=network-online.target pet-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PET_MEMORY_DIR=/opt/pet_memory
+Environment=PET_GW_DIR=/opt/pet_gateway
+# 03:05 跑昨天（避开整点；--date 由 shell 展开，systemd 里 %% 才是字面 %）
+ExecStart=/bin/sh -c '/opt/pet_gateway/.venv/bin/python /opt/pet_memory/bin/nightly.py --date $(date -d yesterday +%%Y%%m%%d) >> /opt/pet_memory/nightly/cron.log 2>&1'
+Nice=10

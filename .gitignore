@@ -31,6 +31,7 @@ tools/diag/uploads/
 # OS
 .DS_Store
 Thumbs.db
+*.lnk
 
 # Local scratch logs
 docs/_*.log

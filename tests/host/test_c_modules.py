@@ -74,3 +74,17 @@ def test_face_quality_thresholds(tmp_path):
         [HOST / "test_face_quality.c", ROOT / "main/middleware/camera/face_quality.c"],
         [HOST / "stubs", ROOT / "main/middleware/camera"])
     _run(exe)
+
+
+@pytest.mark.offline
+def test_breath_sync_spec(tmp_path):
+    """同步呼吸灯规范：LUT 校验和必须 0x51521FF6，且 12 条验收向量逐条对上。
+
+    这台设备（以及以后任何一台并排摆放的设备）能不能"同相"，全押在这张表上；
+    表被手改过的话灯照样会呼吸，只是两台永远对不齐——所以必须进回归。
+    """
+    exe = _build(
+        tmp_path, "breath_test",
+        [HOST / "test_breath_sync.c", ROOT / "main/middleware/periph/breath_sync.c"],
+        [ROOT / "main/middleware/periph"])
+    _run(exe)

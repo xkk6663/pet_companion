@@ -43,6 +43,7 @@
 #include "middleware/mem_diag.h"
 
 #include "audio_processor.h"        /* av_processor: audio_manager/recorder/playback */
+#include "esp_gmf_afe.h"            /* ESP_GMF_AFE_EVT_VAD_START/END（S10 P0 观察回调） */
 #include "esp_codec_dev.h"
 
 #include "xiaozhi_service.h"
@@ -61,6 +62,7 @@
 #include "middleware/periph/safe_reboot.h"
 #include "audio_service.h"
 #include "middleware/audio/mic_frontend.h"
+#include "middleware/audio/mic_gate.h"   /* S10 P1：会话要麦前，先让监听态收口 */
 
 static const char *TAG = "PET_SVC";
 
@@ -192,6 +194,11 @@ static volatile bool s_music_playing;
 static volatile bool s_ptt_want;     /* UI 期望态 */
 static volatile bool s_ptt_on;       /* 上行任务已对齐态 */
 static volatile bool s_uplink_sending;   /* 上行任务正在发大帧（teardown 用） */
+
+/* S10 P0：VAD 观察打点（只记录，不参与任何判定）。
+ * 用途：给"接线前"留行为基线——每小时 VAD_START 次数、平均句长、误报率。
+ * ★ 回调跑在 AFE 任务上下文：只做时间戳与日志，绝不碰 LVGL / 不做 IO。 */
+static int64_t s_gate_vad_start_us;
 
 static uint8_t      *s_uplink_buf;   /* PSRAM 读缓冲 */
 
@@ -808,10 +815,47 @@ static esp_err_t tools_attach_once(void)
     return ESP_OK;
 }
 
+/* ============================================================
+ * S10 P0：VAD 观察回调
+ *
+ * 现状：AFE 的 VAD 一直开着（`algo_mask` 里带 VAD_ENABLE），事件也一直抛，
+ *      但 `recorder_event_cb` 被置 NULL，所以全被丢弃。这里只把它接出来打日志。
+ * 纪律：不改 `s_ptt_on` 判定、不改任何所有权、不上报云端。
+ * 判据：说 3 句出现 3 对 vad_start/vad_end；纯静音应接近 0 对。
+ * ============================================================ */
+static void xz_recorder_event_cb(audio_recorder_handle_t recorder, void *event, void *ctx)
+{
+    (void)recorder;
+    (void)ctx;
+    if (event == NULL) {
+        return;
+    }
+    const esp_gmf_afe_evt_t *evt = (const esp_gmf_afe_evt_t *)event;
+    if (evt->type == ESP_GMF_AFE_EVT_VAD_START) {
+        s_gate_vad_start_us = esp_timer_get_time();
+        ESP_LOGI(TAG, "GATE: vad_start");
+    } else if (evt->type == ESP_GMF_AFE_EVT_VAD_END) {
+        int64_t dur_ms = (s_gate_vad_start_us > 0)
+                       ? (esp_timer_get_time() - s_gate_vad_start_us) / 1000
+                       : 0;
+        ESP_LOGI(TAG, "GATE: vad_end %lldms", (long long)dur_ms);
+        s_gate_vad_start_us = 0;
+    }
+}
+
 static esp_err_t session_setup(void)
 {
     esp_err_t ret = ESP_OK;
     set_state(XZ_STATE_PREPARING);
+
+    /* 0. S10 P1：监听态（若启用）必须先完整归还 codec + recorder。
+     *    ★ 不是"两个 recorder 并存"，是交接：gate 关干净，会话再 claim。 */
+    if (!mic_gate_yield(300)) {
+        ESP_LOGW(TAG, "mic gate busy, session refused");
+        notify(XZ_EVT_ERROR, "audio busy", 0, ESP_ERR_INVALID_STATE);
+        set_state(XZ_STATE_IDLE);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     /* 1. ext 独占租借 */
     esp_codec_dev_handle_t spk = NULL, mic = NULL;
@@ -930,7 +974,8 @@ static esp_err_t session_setup(void)
     enc->params.pcm.audio_info.sample_bits = XZ_BITS;
     enc->params.pcm.audio_info.channels = 1;
     enc->params.pcm.audio_info.frame_duration = XZ_FRAME_MS;
-    rcfg.recorder_event_cb = NULL;
+    /* S10 P0：把已经被丢弃的 VAD 事件接出来（只打日志；行为零变化） */
+    rcfg.recorder_event_cb = xz_recorder_event_cb;
     rcfg.recorder_ctx = NULL;
     /* ★★ §35 核隔离 + 降优先级（见 XZ_REC_TASK_* 宏处的完整推导）。
      *   组件默认：feed=core0/prio5、fetch=core1/prio5、recorder=core0/prio10；
@@ -1263,7 +1308,10 @@ esp_err_t xiaozhi_service_start(void)
     if (s_state != XZ_STATE_IDLE) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (!audio_service_mic_available()) {
+    if (!audio_service_mic_available() && !mic_gate_is_owner()) {
+        /* 闸门持有租约时 audio_service_mic_available() 必然是 false；
+         * 这不是"被别的功能占用"，而是本服务自己的监听态。
+         * 真正的交接在 session_setup() 的 mic_gate_yield()，不能在这里提前拒绝。 */
         return ESP_ERR_INVALID_STATE;
     }
     xz_cmd_t cmd = { .id = XZ_CMD_START, .url = NULL, .kind = 0 };
