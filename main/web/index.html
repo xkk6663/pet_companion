@@ -213,6 +213,26 @@
       <div class="muted" id="cp-foot" style="margin-top:10px">数据源：/sdcard/companion · 每 2 s 刷新</div>
     </div>
   </div>
+
+  <div id="page-screen" class="page">
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px">
+        直读 RGB 面板 framebuffer（800×480）· 连续默认高清；取消勾选则 2×2 抽样，速度更快
+      </div>
+      <canvas id="scr-canvas" width="800" height="480"
+              style="width:100%;max-width:800px;margin:0 auto;display:block;background:#000;border-radius:8px;image-rendering:-webkit-optimize-contrast;image-rendering:pixelated;image-rendering:crisp-edges"></canvas>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+        <button onclick="scrShot(scrScale())">刷新一帧</button>
+        <button onclick="scrToggleLive()" id="scr-live-btn">连续</button>
+        <button onclick="scrDownload('bmp')">下载 BMP</button>
+        <button onclick="scrDownload('jpg')">下载 JPG</button>
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="scr-hi" checked> 高清 800×480
+        </label>
+      </div>
+      <div class="muted" id="scr-stat" style="margin-top:8px">-</div>
+    </div>
+  </div>
 </main>
 
 <div id="lightbox" onclick="lbClose()">
