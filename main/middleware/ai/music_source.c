@@ -35,6 +35,7 @@
 #include "nvs.h"
 
 #include "music_source.h"
+#include "middleware/periph/flash_guard.h"   /* P0：NVS 写（base/token）包静默窗口 */
 
 static const char *TAG = "MUSIC_SRC";
 
@@ -138,16 +139,33 @@ esp_err_t music_source_init(void)
 
 esp_err_t music_source_set_cfg(const char *base, const char *token)
 {
+    /* NVS commit = flash 擦写窗口；录像中直接拒绝，让调用方延后重试。
+     * 注意不能走 ESP_RETURN_ON_ERROR：那条宏会提前 return，漏掉 flash_guard_end。 */
+    esp_err_t err = flash_guard_begin("music cfg");
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs write deferred (%s)", esp_err_to_name(err));
+        return err;
+    }
+
     if (base != NULL && base[0] != '\0') {
-        ESP_RETURN_ON_ERROR(ms_nvs_set_str(MUSIC_SRC_NVS_NS, MUSIC_SRC_NVS_KEY_BASE, base),
-                            TAG, "nvs base");
+        err = ms_nvs_set_str(MUSIC_SRC_NVS_NS, MUSIC_SRC_NVS_KEY_BASE, base);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "nvs base: %s", esp_err_to_name(err));
+            flash_guard_end();
+            return err;
+        }
         snprintf(s_base, sizeof(s_base), "%s", base);
     }
     if (token != NULL && token[0] != '\0') {
-        ESP_RETURN_ON_ERROR(ms_nvs_set_str(MUSIC_SRC_NVS_NS, MUSIC_SRC_NVS_KEY_TOK, token),
-                            TAG, "nvs token");
+        err = ms_nvs_set_str(MUSIC_SRC_NVS_NS, MUSIC_SRC_NVS_KEY_TOK, token);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "nvs token: %s", esp_err_to_name(err));
+            flash_guard_end();
+            return err;
+        }
         snprintf(s_token, sizeof(s_token), "%s", token);
     }
+    flash_guard_end();
     return ESP_OK;
 }
 

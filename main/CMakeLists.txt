@@ -30,6 +30,8 @@ idf_component_register(SRCS
                         "middleware/ai/music_source.c"
                         "middleware/ai/music_lib.c"
                         "middleware/periph/safe_reboot.c"
+                        "middleware/periph/boot_guard.c"
+                        "middleware/periph/flash_guard.c"
                         "middleware/net/wifi_manager.c"
                         "middleware/net/net_time_service.c"
                         ## ---- §74：网页管理端（APSTA 热点/局域网浏览器管理）----
@@ -39,6 +41,8 @@ idf_component_register(SRCS
                         "middleware/periph/fs_service.c"
                         "middleware/periph/sdcard_service.c"
                         "middleware/periph/led_service.c"
+                        ## ---- 陪伴时长累计存档（按日期分桶写 SD，离线也照记）----
+                        "middleware/periph/companion_stats.c"
                         ## ---- 同步呼吸灯：跨设备同相（亮度是绝对 UTC 的纯函数）----
                         "middleware/periph/breath_sync.c"
                         "middleware/periph/button_service.c"
@@ -102,7 +106,7 @@ idf_component_register(SRCS
                                     "middleware/periph"
                                     "middleware/face_db"
                                     "middleware/camera"
-                      ## ---- §74：管理端单页 HTML 内嵌（符号 _binary_web_index_html_*）----
+                      ## ---- §74：管理端单页 HTML 内嵌（符号 _binary_index_html_*）----
                       EMBED_FILES "web/index.html"
                       PRIV_REQUIRES esp_littlefs esp_wifi esp_event esp_netif nvs_flash esp_timer lwip
                                     ## ★ S9 桌宠：单一 WebSocket 长连接（ws_client.c）——

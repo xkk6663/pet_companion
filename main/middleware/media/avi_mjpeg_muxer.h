@@ -115,6 +115,31 @@ typedef void *(*avi_alloc_fn)(size_t size);
 typedef void  (*avi_release_fn)(void *ptr);
 void avi_muxer_set_batch_allocator(avi_alloc_fn alloc_fn, avi_release_fn release_fn);
 
+/* ===========================================================================
+ *  掉电修复（P1）
+ *
+ * 断电/拔卡时文件通常停在"movi 里已经有一串 00dc，但 RIFF/movi 大小还是 0、
+ * 也没有 idx1"的状态。本函数只做**容器层修复**：
+ *   ① 从固定偏移 MOVI_DATA_START 顺序扫 00dc/01dc，统计真实帧数、movi 字节数；
+ *   ② 回填 avih/strh 的帧数与建议缓冲、movi LIST size、RIFF size；
+ *   ③ 在 movi 末尾重建 idx1（与 close 同一套代码）。
+ * 不校验 JPEG 内容，不移动帧数据；扫描到非 00dc/01dc（例如旧 idx1）即停止。
+ *
+ * @param path  AVI 路径
+ * @param out   可为 NULL；成功时带回帧数/字节数/宽高/标称 fps
+ * @return AVI_OK / AVI_ERR_IO / AVI_ERR_ARG（不是本工程写出的 AVI 或 0 帧）
+ * ★ 纯 C99，可在 PC 上原生单测；调用方负责确保文件没有被同时打开。
+ * =========================================================================== */
+typedef struct {
+    uint32_t frames;
+    uint64_t bytes;      /* movi 数据区字节数（含 chunk 头与 pad） */
+    uint32_t width;
+    uint32_t height;
+    uint32_t fps;
+} avi_repair_info_t;
+
+avi_result_t avi_muxer_repair_file(const char *path, avi_repair_info_t *out);
+
 #ifdef __cplusplus
 }
 #endif

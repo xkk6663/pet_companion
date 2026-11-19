@@ -32,6 +32,9 @@
 #include "middleware/ai/cloud_media_service.h"   /* ★ S9 P6：云端生图落盘 */
 #include "middleware/periph/fs_service.h"
 #include "middleware/periph/sdcard_service.h"
+#include "middleware/periph/boot_guard.h"      /* P0：启动失败计数 + 安全模式 */
+#include "middleware/periph/flash_guard.h"     /* P0：运行期 flash 写静默窗口 */
+#include "middleware/periph/safe_reboot.h"     /* 安全模式自愈软重启 */
 #include "middleware/periph/led_service.h"
 #include "middleware/periph/button_service.h"
 #include "middleware/net/wifi_manager.h"
@@ -740,6 +743,60 @@ void app_main(void)
     ESP_ERROR_CHECK(fs_service_mount());
     MEM_STAGE(TAG, "after fs_service_mount");
 
+    /* ★ P0：先推进启动失败计数，再决定是否走安全模式。
+     *   必须在任何重初始化（音频/相机/模型/蓝牙）之前，否则"安全模式"
+     *   本身也会被上一次的崩溃路径拖死。 */
+    flash_guard_init();
+    boot_guard_init();
+
+    if (boot_guard_should_enter_safe_mode()) {
+        ESP_LOGE(TAG, "!!! SAFE MODE: %u consecutive boot failures; "
+                      "skip camera/audio/AI/media, keep Wi-Fi + Web only",
+                 (unsigned)boot_guard_failure_count());
+        /* SD 只用于 Web 管理端列文件；挂不上也不影响 Wi-Fi/Web。 */
+        sdcard_service_mount();
+        /* 不注册 on_wifi_evt：校时/天气依赖 UI 与 net_time 服务，安全模式不启用。 */
+        wifi_manager_set_sys_cb(NULL);
+        wifi_manager_init();
+        esp_err_t we = web_server_init();
+        ESP_LOGW(TAG, "SAFE MODE ready (web=%s). POST /api/recovery/clear then "
+                      "/api/system/reboot to leave safe mode.",
+                 esp_err_to_name(we));
+
+        /* ★ 自愈：安全模式没有 UI，唯一出口是网页 /api/recovery/clear。
+         *   现场若连不上路由（网页打不开），设备会一直停在这里、看起来像"砖"。
+         *   因此 120 s 没连上 Wi-Fi 就清计数 + 软重启，回到正常流程；
+         *   若固件真的崩，仍会再累积 3 次失败重新进入安全模式，不掩盖故障。 */
+        const uint32_t heal_wait_ms = 120000;
+        const uint32_t stable_need_s = 10;
+        uint32_t stable_s = 0;
+        ESP_LOGW(TAG, "SAFE MODE: wait up to %u s for a stable Wi-Fi link",
+                 (unsigned)(heal_wait_ms / 1000));
+        for (uint32_t waited = 0; waited < heal_wait_ms; waited += 1000) {
+            /* ★ 不能用"某一刻 is_connected()"就判连上：STA 关联成功的瞬间
+             *   也会置位，紧接着就失败断开，会把自愈逻辑骗过去。必须连续
+             *   稳定 N 秒（拿到 IP 且没再断）才算真的可用。 */
+            if (wifi_manager_is_connected()) {
+                if (++stable_s >= stable_need_s) {
+                    break;
+                }
+            } else {
+                stable_s = 0;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+        if (stable_s < stable_need_s) {
+            ESP_LOGW(TAG, "SAFE MODE: no stable Wi-Fi in %u s, self-heal reboot",
+                     (unsigned)(heal_wait_ms / 1000));
+            boot_guard_clear();
+            safe_reboot_perform("safe mode self-heal");
+        }
+
+        for (;;) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+
     /* ★ §50 全 CJK bin 字体（AI 对话页中文）：阶段 1 读文件进 PSRAM。
      *   F40 约束：~2.7MB 的 flash read 按 16KB 分块、每块关一次全局 cache，
      *   窗口内任何核的 PSRAM 访问都会 Cache error —— 必须在后续任务创建
@@ -926,6 +983,7 @@ void app_main(void)
      *     （必须在任何 avi_muxer_open 之前执行，故放这里而不是懒加载）。 */
     capture_service_init();
     record_video_service_init();
+    record_video_service_repair_start();   /* P1：扫 /videos，修复掉电 AVI */
     MEM_STAGE(TAG, "after capture/record_video service init");
     /* ★ §74：网页管理端（httpd:80；AP 热点 http://192.168.4.1 与局域网
      *   http://<STA-IP> 均可访问；只读 SD + 打卡事件轮询）。放在 punch/
@@ -952,6 +1010,10 @@ void app_main(void)
     page_splash_set_enter_cb(on_splash_enter);
     PageManager_Load(&Page_Splash);     /* stack root */
     MEM_STAGE(TAG, "after splash load");
+
+    /* ★ P0：走到这里说明 FS/显示/音频/Wi-Fi/Web/UI 全链路都活着，
+     *   清掉启动失败计数；下一次若在到达这里之前崩，计数会重新累计。 */
+    boot_guard_mark_ready();
 
     ESP_LOGI(TAG, "boot done, waiting swipe up");
 

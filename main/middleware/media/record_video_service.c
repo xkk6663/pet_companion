@@ -24,6 +24,7 @@
 #include "freertos/task.h"
 
 #include <errno.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -413,6 +414,75 @@ void record_video_service_init(void)
 {
     avi_muxer_set_batch_allocator(rec_batch_alloc, rec_batch_release);
     ESP_LOGI(TAG, "init (muxer idx-batch buffer -> PSRAM; finalize runs in service task)");
+}
+
+/* ---------------------------------------------------------------------------
+ *  掉电修复任务（P1）
+ *
+ *  ⚠ 只在开机做：此刻没有任何录像文件被打开，修复不会和录像写盘并发。
+ *  栈必须内部 RAM（FATFS/SD IO 的任务栈不能放 PSRAM，见文件头 F35）。
+ *  低优先级 + 钉 Core0：LVGL/相机在 Core1，扫描几十 MB 也不抢它们的 CPU。
+ * ------------------------------------------------------------------------- */
+#define REPAIR_TASK_STACK 6144
+#define REPAIR_TASK_PRIO  1
+
+static void avi_repair_task(void *arg)
+{
+    (void)arg;
+    char dir[REC_DIR_BUF + 8];
+    snprintf(dir, sizeof(dir), "%s%s", SDCARD_MNT_PATH, VIDEO_REC_DIR_NAME);
+
+    DIR *d = opendir(dir);
+    if (d == NULL) {
+        /* 还没录过像时目录不存在（首次录像才 mkdir），这不是故障。 */
+        ESP_LOGI(TAG, "avi repair: no video dir yet (%s, errno=%d)", dir, errno);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    int seen = 0, fixed = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        const char *dot = strrchr(e->d_name, '.');
+        if (dot == NULL || strcmp(dot, ".avi") != 0) continue;
+
+        char path[400];   /* dirent 名字最长 255，必须比 dir(72)+255 更大 */
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        seen++;
+
+        avi_repair_info_t info;
+        memset(&info, 0, sizeof(info));
+        avi_result_t r = avi_muxer_repair_file(path, &info);
+        if (r == AVI_OK) {
+            fixed++;
+            ESP_LOGI(TAG, "avi repair OK: %s frames=%u movi=%llu B %ux%u@%u",
+                     e->d_name, (unsigned)info.frames,
+                     (unsigned long long)info.bytes,
+                     (unsigned)info.width, (unsigned)info.height,
+                     (unsigned)info.fps);
+        } else {
+            /* 正常关闭过的文件也会重扫成功；只有完全不像 AVI 的才报 WARN。 */
+            ESP_LOGW(TAG, "avi repair skip: %s (%s)", e->d_name,
+                     r == AVI_ERR_ARG ? "not a project AVI / 0 frames" : "io error");
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));   /* 让出 CPU，避免开机瞬间长时间占 Core0 */
+    }
+    closedir(d);
+    ESP_LOGI(TAG, "avi repair done: scanned=%d repaired=%d", seen, fixed);
+    vTaskDelete(NULL);
+}
+
+void record_video_service_repair_start(void)
+{
+    if (!sdcard_service_is_mounted()) {
+        ESP_LOGI(TAG, "avi repair skipped: SD not mounted");
+        return;
+    }
+    if (xTaskCreatePinnedToCore(avi_repair_task, "avi_repair",
+                                REPAIR_TASK_STACK, NULL, REPAIR_TASK_PRIO, NULL, 0) != pdPASS) {
+        ESP_LOGW(TAG, "avi repair task create failed (internal RAM tight)");
+    }
 }
 
 esp_err_t record_video_service_start(void)

@@ -74,6 +74,37 @@
          border-top-color:#fff; border-radius:50%; animation:sp 1s linear infinite;
          vertical-align:-2px; }
   @keyframes sp{ to{ transform:rotate(360deg);} }
+
+  /* ---------- 陪伴时长监控（cp-* 前缀，避免和上面的通用类互相污染） ---------- */
+  .cp-live{ font-variant-numeric:tabular-nums; font-family:ui-monospace,Consolas,monospace;
+            font-size:42px; line-height:1.1; letter-spacing:1px; color:#22d3ee; }
+  .cp-pill{ display:inline-block; padding:2px 10px; border-radius:12px; font-size:12px;
+            border:1px solid var(--line); color:var(--dim); margin-left:8px; vertical-align:6px; }
+  .cp-pill.run{ border-color:var(--ok); color:var(--ok); }
+  .cp-pill.pause{ border-color:var(--warn); color:var(--warn); }
+  .cp-row{ display:flex; gap:10px; flex-wrap:wrap; }
+  .cp-stat{ flex:1 1 140px; background:var(--card); border:1px solid var(--line);
+            border-radius:10px; padding:10px 12px; }
+  .cp-stat .k{ color:var(--dim); font-size:12px; }
+  .cp-stat .v{ font-size:21px; font-variant-numeric:tabular-nums;
+               font-family:ui-monospace,Consolas,monospace; margin-top:2px; }
+  .cp-stat .s{ color:var(--dim); font-size:11px; margin-top:2px; }
+  .cp-pie{ display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  .cp-pie canvas{ width:190px; height:190px; flex:none; }
+  .cp-legend{ flex:1 1 180px; min-width:160px; }
+  .cp-lg{ display:flex; align-items:center; gap:8px; padding:5px 0;
+          border-bottom:1px solid var(--line); font-size:13px; }
+  .cp-lg:last-child{ border-bottom:none; }
+  .cp-sw{ width:10px; height:10px; border-radius:3px; flex:none; }
+  .cp-lg .n{ flex:1; }
+  .cp-lg .t{ font-variant-numeric:tabular-nums;
+             font-family:ui-monospace,Consolas,monospace; color:var(--dim); }
+  .cp-bar{ margin:8px 0; }
+  .cp-bar .h{ display:flex; justify-content:space-between; font-size:12px; color:var(--dim); }
+  .cp-bar .h b{ color:var(--txt); font-weight:500; }
+  .cp-bar .track{ height:8px; background:#161616; border:1px solid var(--line);
+                 border-radius:5px; overflow:hidden; margin-top:3px; }
+  .cp-bar .fill{ height:100%; background:var(--acc); width:0; transition:width .3s; }
 </style>
 </head>
 <body>
@@ -85,6 +116,7 @@
 <nav>
   <button data-p="live" class="on">实时打卡</button>
   <button data-p="log">打卡记录</button>
+  <button data-p="companion">陪伴时长</button>
   <button data-p="media">媒体浏览</button>
   <button data-p="manage">壁纸/音乐</button>
   <button data-p="screen">屏幕</button>
@@ -138,23 +170,47 @@
       <div id="mu-list"></div>
     </div>
   </div>
-  <div id="page-screen" class="page">
+  <div id="page-companion" class="page">
     <div class="card">
-      <div class="muted" style="margin-bottom:8px">
-        直读 RGB 面板 framebuffer（800×480）· 连续默认高清；取消勾选则 2×2 抽样，速度更快
+      <div class="muted">本次会话（相机页上的人脸计时）</div>
+      <div><span id="cp-live" class="cp-live">00:00:00</span><span id="cp-pill" class="cp-pill">未在计时</span></div>
+      <div class="muted" id="cp-hint">进相机页并让人脸入画，这里才会跳</div>
+    </div>
+
+    <div class="cp-row" style="margin-bottom:12px">
+      <div class="cp-stat"><div class="k">今日陪伴</div><div class="v" id="cp-today">--</div>
+        <div class="s" id="cp-today-s">按日期桶</div></div>
+      <div class="cp-stat"><div class="k">累计总计</div><div class="v" id="cp-total">--</div>
+        <div class="s">d_total.txt</div></div>
+      <div class="cp-stat"><div class="k">无日期池</div><div class="v" id="cp-nodate">--</div>
+        <div class="s">未校时的那些日子</div></div>
+    </div>
+
+    <div class="card">
+      <div class="muted" style="margin-bottom:6px">设备状态（功能参数）</div>
+      <div class="cp-row" style="gap:8px">
+        <div class="cp-stat" style="flex:1 1 120px"><div class="k">运行时长</div><div class="v" id="cp-up">--</div></div>
+        <div class="cp-stat" style="flex:1 1 120px"><div class="k">WiFi 信号</div><div class="v" id="cp-rssi">--</div>
+          <div class="s" id="cp-ip">--</div></div>
+        <div class="cp-stat" style="flex:1 1 120px"><div class="k">内部堆</div><div class="v" id="cp-heap">--</div>
+          <div class="s">PSRAM <span id="cp-psram">--</span></div></div>
+        <div class="cp-stat" style="flex:1 1 120px"><div class="k">AI 会话</div><div class="v" id="cp-sess" style="font-size:17px">--</div>
+          <div class="s" id="cp-busy">--</div></div>
       </div>
-      <canvas id="scr-canvas" width="800" height="480"
-              style="width:100%;max-width:800px;margin:0 auto;display:block;background:#000;border-radius:8px;image-rendering:-webkit-optimize-contrast;image-rendering:pixelated;image-rendering:crisp-edges"></canvas>
-      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
-        <button onclick="scrShot(scrScale())">刷新一帧</button>
-        <button onclick="scrToggleLive()" id="scr-live-btn">连续</button>
-        <button onclick="scrDownload('bmp')">下载 BMP</button>
-        <button onclick="scrDownload('jpg')">下载 JPG</button>
-        <label class="muted" style="display:flex;align-items:center;gap:6px">
-          <input type="checkbox" id="scr-hi" checked> 高清 800×480
-        </label>
+    </div>
+
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px">时长构成</div>
+      <div class="cp-pie">
+        <canvas id="cp-pie" width="380" height="380"></canvas>
+        <div class="cp-legend" id="cp-legend"></div>
       </div>
-      <div class="muted" id="scr-stat" style="margin-top:8px">-</div>
+    </div>
+
+    <div class="card">
+      <div class="muted" style="margin-bottom:6px">按日走势（最近 14 天，有记录的）</div>
+      <div id="cp-bars"><div class="muted">暂无按日记录</div></div>
+      <div class="muted" id="cp-foot" style="margin-top:10px">数据源：/sdcard/companion · 每 2 s 刷新</div>
     </div>
   </div>
 </main>
@@ -198,10 +254,171 @@ document.querySelectorAll('nav button').forEach(b => {
     if (b.dataset.p === 'log'  && !logLoaded) loadLog();
     if (b.dataset.p === 'media') loadDir(curDir);
     if (b.dataset.p === 'manage') loadManage();
+    if (b.dataset.p === 'companion') cpStart(); else cpStop();   /* 只在看这一页时轮询 */
     if (b.dataset.p === 'screen') scrShot(scrScale());
     else if (scrTimer) scrToggleLive();       /* 离开屏幕页就停连续抓图 */
   };
 });
+
+/* ---------- 陪伴时长监控（数据来自 /api/companion/stats） ----------
+ * · 只在 tab 可见时轮询，切走就停（单任务 httpd 上别常驻两条 2 s 轮询）
+ * · 会话读数在两次轮询之间用本地时钟续跳
+ * · 饼图纯 canvas 画，不引外部库（设备可能没有外网 */
+let cpData = null, cpAt = 0, cpDead = false;
+let cpPollT = null, cpLiveT = null, cpStatT = null;
+
+function cpFmt(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s / 60) % 60), x = s % 60;
+  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(x).padStart(2,'0');
+}
+function cpFmtShort(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  const h = Math.floor(s / 3600), m = Math.floor((s / 60) % 60);
+  if (h > 0) return h + ' h ' + String(m).padStart(2,'0') + ' m';
+  if (m > 0) return m + ' m ' + String(s % 60).padStart(2,'0') + ' s';
+  return (s % 60) + ' s';
+}
+
+function cpDrawPie(today, nodate, other, total) {
+  const cv = $('#cp-pie');
+  if (!cv) return;
+  const g = cv.getContext('2d'), W = cv.width;
+  const R = W / 2, cx = R, cy = R, r0 = W * 0.16, r1 = W * 0.40;
+  g.clearRect(0, 0, W, W);
+
+  const segs = [];
+  if (today  > 0) segs.push([today,  '#4a9eff']);
+  if (nodate > 0) segs.push([nodate, '#e0a040']);
+  if (other  > 0) segs.push([other,  '#3fb96f']);
+
+  if (!segs.length) {
+    g.strokeStyle = '#333'; g.lineWidth = W * 0.06;
+    g.beginPath(); g.arc(cx, cy, (r0 + r1) / 2, 0, Math.PI * 2); g.stroke();
+  } else {
+    const sum = segs.reduce((a, b) => a + b[0], 0);
+    let a0 = -Math.PI / 2;
+    segs.forEach(sg => {
+      const a1 = a0 + (sg[0] / sum) * Math.PI * 2;
+      g.fillStyle = sg[1];
+      g.beginPath(); g.arc(cx, cy, r1, a0, a1); g.arc(cx, cy, r0, a1, a0, true);
+      g.closePath(); g.fill();
+      a0 = a1;
+    });
+  }
+
+  g.fillStyle = '#e6e6e6'; g.textAlign = 'center';
+  g.font = '600 ' + (W * 0.085) + 'px ui-monospace,Consolas,monospace';
+  g.fillText(cpFmt(total), cx, cy + W * 0.02);
+  g.fillStyle = '#9a9a9a';
+  g.font = (W * 0.055) + 'px -apple-system,"PingFang SC",sans-serif';
+  g.fillText('累计', cx, cy + W * 0.10);
+}
+
+function cpRender(d) {
+  const today = d.today_s || 0, nodate = d.nodate_s || 0, total = d.total_s || 0;
+  const other = Math.max(0, total - today - nodate);
+
+  $('#cp-today').textContent  = cpFmt(today);
+  $('#cp-total').textContent  = cpFmt(total);
+  $('#cp-nodate').textContent = cpFmt(nodate);
+  $('#cp-today-s').textContent = d.today ? ('日期桶 ' + d.today) : '未校时（记入无日期池）';
+
+  cpDrawPie(today, nodate, other, total);
+
+  const pct = v => total > 0 ? Math.round(v / total * 100) : 0;
+  $('#cp-legend').innerHTML =
+    '<div class="cp-lg"><span class="cp-sw" style="background:#4a9eff"></span>' +
+      '<span class="n">今日</span><span class="t">' + cpFmt(today) + ' · ' + pct(today) + '%</span></div>' +
+    '<div class="cp-lg"><span class="cp-sw" style="background:#e0a040"></span>' +
+      '<span class="n">无日期池</span><span class="t">' + cpFmt(nodate) + ' · ' + pct(nodate) + '%</span></div>' +
+    '<div class="cp-lg"><span class="cp-sw" style="background:#3fb96f"></span>' +
+      '<span class="n">其他日期</span><span class="t">' + cpFmt(other) + ' · ' + pct(other) + '%</span></div>';
+
+  const days = d.days || [];
+  if (!days.length) {
+    $('#cp-bars').innerHTML = '<div class="muted">暂无按日记录</div>';
+  } else {
+    const mx = Math.max.apply(null, days.map(x => x.s || 0)) || 1;
+    $('#cp-bars').innerHTML = days.map(x => {
+      const p = Math.max(2, Math.round((x.s || 0) / mx * 100));
+      return '<div class="cp-bar"><div class="h"><b>' + x.d + '</b><span>' + cpFmtShort(x.s) + '</span></div>' +
+             '<div class="track"><div class="fill" style="width:' + p + '%"></div></div></div>';
+    }).join('');
+  }
+
+  $('#cp-foot').textContent = '数据源：/sdcard/companion' +
+    (d.sd ? '' : '（SD 未挂载）') + (d.ntp ? '' : '（未校时，新增量进无日期池）') +
+    ' · 每 2 s 刷新';
+
+  cpLive();
+}
+
+function cpLive() {
+  if (!cpData) return;
+  let sess = cpData.sess || 0;
+  if (cpData.run && !cpData.paused) sess += Math.round((Date.now() - cpAt) / 1000);
+  $('#cp-live').textContent = cpFmt(sess);
+
+  const pill = $('#cp-pill');
+  if (cpDead)            { pill.className = 'cp-pill';       pill.textContent = '设备离线'; }
+  else if (cpData.paused){ pill.className = 'cp-pill pause'; pill.textContent = '已暂停'; }
+  else if (cpData.run)   { pill.className = 'cp-pill run';   pill.textContent = '计时中'; }
+  else                   { pill.className = 'cp-pill';       pill.textContent = '无人在场'; }
+
+  $('#cp-hint').textContent = cpData.run
+    ? (cpData.paused ? '暂停中：读数冻结，不影响累计' : '正在累计，每满 30 s 落一次盘')
+    : '等待人脸入画（相机页需打开）';
+}
+
+async function cpPoll() {
+  try {
+    const r = await fetch('/api/companion/stats?_=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    cpDead = false;
+    cpData = await r.json(); cpAt = Date.now();
+    cpRender(cpData);
+  } catch (e) {
+    cpDead = true;
+    if (cpData) cpLive();
+  }
+}
+
+async function cpStatus() {
+  try {
+    const s = await (await fetch('/api/system/status?_=' + Date.now(), { cache: 'no-store' })).json();
+    const up = s.uptime_s || 0;
+    $('#cp-up').textContent = (up >= 86400 ? Math.floor(up / 86400) + 'd ' : '') +
+      Math.floor((up / 3600) % 24) + 'h ' + String(Math.floor((up / 60) % 60)).padStart(2,'0') + 'm';
+
+    const w = s.wifi || {};
+    $('#cp-rssi').textContent = (typeof w.rssi === 'number') ? (w.rssi + ' dBm') : '--';
+    $('#cp-ip').textContent = (w.role === 'AP' ? 'AP ' : '') + (w.ip || '') +
+      (w.sta_ssid ? ' · ' + w.sta_ssid : '');
+    $('#cp-rssi').style.color = (typeof w.rssi !== 'number') ? 'var(--dim)'
+      : (w.rssi > -67 ? 'var(--ok)' : (w.rssi > -80 ? 'var(--warn)' : 'var(--bad)'));
+
+    $('#cp-heap').textContent  = fmtSize(s.heap_internal || 0);
+    $('#cp-psram').textContent = fmtSize(s.heap_psram || 0);
+
+    const ses = s.session || {}, b = s.busy || {};
+    $('#cp-sess').textContent = ses.state || '--';
+    $('#cp-busy').textContent = '打卡 ' + (b.punch ? '忙' : '空闲') + ' · 抓拍 ' + (b.capture || 0);
+  } catch (e) { /* 离线时保留上一次读数 */ }
+}
+
+function cpStart() {
+  if (cpPollT) return;
+  cpPoll(); cpStatus();
+  cpPollT = setInterval(cpPoll, 2000);
+  cpStatT = setInterval(cpStatus, 3000);
+  cpLiveT = setInterval(cpLive, 1000);
+}
+
+function cpStop() {
+  clearInterval(cpPollT); clearInterval(cpStatT); clearInterval(cpLiveT);
+  cpPollT = cpStatT = cpLiveT = null;
+}
 
 /* ---------- 设备屏幕镜像（直读 RGB framebuffer，协议见 web_server.c） ---------- */
 let scrTimer = null, scrBusy = false;

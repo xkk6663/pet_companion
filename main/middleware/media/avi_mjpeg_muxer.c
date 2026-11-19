@@ -485,3 +485,121 @@ void avi_muxer_set_batch_allocator(avi_alloc_fn alloc_fn, avi_release_fn release
     s_batch_alloc   = alloc_fn;
     s_batch_release = release_fn;
 }
+
+/* ------------------------------------------------------------------ 掉电修复 */
+
+static long file_size(FILE *fp)
+{
+    long cur = ftell(fp);
+    if (cur < 0) return -1;
+    if (fseek(fp, 0, SEEK_END) != 0) return -1;
+    long end = ftell(fp);
+    if (fseek(fp, cur, SEEK_SET) != 0) return -1;
+    return end;
+}
+
+avi_result_t avi_muxer_repair_file(const char *path, avi_repair_info_t *out)
+{
+    if (!path) return AVI_ERR_ARG;
+
+    FILE *fp = fopen(path, "r+b");
+    if (!fp) return AVI_ERR_IO;
+
+    avi_result_t r = AVI_ERR_IO;
+    uint8_t hdr[12];
+    uint8_t b[8];
+    uint32_t width = 0, height = 0, fps = 0;
+    uint32_t frames = 0, max_frame = 0;
+    uint64_t sum_frame = 0;
+    long fsz = file_size(fp);
+
+    if (fsz < (long)MOVI_DATA_START) goto done;
+
+    /* ---- RIFF + AVI ---- */
+    if (fseek(fp, 0, SEEK_SET) != 0) goto done;
+    if (fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) goto done;
+    if (memcmp(hdr, "RIFF", 4) != 0 || memcmp(hdr + 8, "AVI ", 4) != 0) {
+        r = AVI_ERR_ARG;
+        goto done;
+    }
+
+    /* ---- LIST movi ---- */
+    if (fseek(fp, (long)OFF_MOVI_LIST, SEEK_SET) != 0) goto done;
+    if (fread(hdr, 1, 12, fp) != 12) goto done;
+    if (memcmp(hdr, "LIST", 4) != 0 || memcmp(hdr + 8, "movi", 4) != 0) {
+        r = AVI_ERR_ARG;
+        goto done;
+    }
+
+    /* ---- 宽高（strf 的 BITMAPINFOHEADER）---- */
+    if (fseek(fp, (long)OFF_STRF_DATA + 4, SEEK_SET) != 0) goto done;
+    if (fread(b, 1, 8, fp) != 8) goto done;
+    width  = get_u32le(b);
+    height = get_u32le(b + 4);
+
+    /* ---- 标称 fps（strh: dwScale / dwRate）---- */
+    if (fseek(fp, (long)OFF_STRH_DATA + 20, SEEK_SET) != 0) goto done;
+    if (fread(b, 1, 8, fp) != 8) goto done;
+    {
+        uint32_t scale = get_u32le(b);
+        uint32_t rate  = get_u32le(b + 4);
+        fps = (scale && rate) ? (rate / scale) : 0;
+    }
+    if (fps == 0 || fps > 120) fps = 12;
+
+    /* ---- 扫 movi ---- */
+    long pos = (long)MOVI_DATA_START;
+    while (pos + (long)CHUNK_HDR <= fsz) {
+        uint8_t ch[CHUNK_HDR];
+        if (fseek(fp, pos, SEEK_SET) != 0) break;
+        if (fread(ch, 1, CHUNK_HDR, fp) != CHUNK_HDR) break;
+
+        /* 只认视频数据块；遇到 idx1/LIST/垃圾就停（后面的内容一律重建）。 */
+        if (memcmp(ch, "00dc", 4) != 0 && memcmp(ch, "01dc", 4) != 0) break;
+
+        uint32_t sz = get_u32le(ch + 4);
+        if (sz == 0 || sz > (uint32_t)(fsz - pos - (long)CHUNK_HDR)) break;
+
+        frames++;
+        sum_frame += sz;
+        if (sz > max_frame) max_frame = sz;
+        pos += (long)(CHUNK_HDR + sz + (sz & 1u));
+    }
+
+    if (frames == 0 || width == 0 || height == 0) {
+        r = AVI_ERR_ARG;
+        goto done;
+    }
+
+    /* ---- 用 close() 同一套代码回填头 + 重建 idx1 ---- */
+    {
+        avi_muxer_t tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        tmp.fp         = fp;
+        tmp.width      = width;
+        tmp.height     = height;
+        tmp.nominal_fps = fps;
+        tmp.frames     = frames;
+        tmp.movi_bytes = (uint64_t)(pos - (long)MOVI_DATA_START);
+        tmp.max_frame  = max_frame;
+        tmp.sum_frame  = sum_frame;
+
+        if (patch_headers(&tmp) != 0) goto done;
+        if (write_index_and_sizes(&tmp, pos) != 0) goto done;
+        if (fflush(fp) != 0) goto done;
+    }
+
+    if (out) {
+        out->frames = frames;
+        out->bytes  = (uint64_t)(pos - (long)MOVI_DATA_START);
+        out->width  = width;
+        out->height = height;
+        out->fps    = fps;
+    }
+    r = AVI_OK;
+
+done:
+    if (fp) fclose(fp);
+    return r;
+}
+

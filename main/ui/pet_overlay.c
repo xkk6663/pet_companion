@@ -61,6 +61,7 @@
 #include "middleware/ai/ai_action.h"
 #include "middleware/ai/cloud_media_service.h"
 #include "middleware/ai/ai_camera.h"
+#include "middleware/periph/led_service.h"   /* ★ MODE 键（非对话界面）切 RGB 开关 */
 
 LV_FONT_DECLARE(lv_font_cn_20);
 
@@ -172,6 +173,8 @@ static volatile bool s_touch_ptt_ui;
  * 决定会话就绪后把 PTT 归到哪个 UI 来源。 */
 static volatile bool s_ptt_pending_touch;
 static volatile bool s_kb_req;
+/* ★ MODE 键当 RGB 开关时用的本地状态（只被 iot_button 任务写，读也只读它） */
+static volatile bool s_rgb_on = true;
 static char          s_local_say[PET_LINE_MAX];
 /* 文字（命令 chip / 键盘）在会话未就绪时的暂存：懒会话就绪后由 drain 补发。
  * 只在 LVGL 线程读写（chip/kb 回调与 50ms 定时器同线程）⇒ 不需要锁。 */
@@ -1536,6 +1539,18 @@ void pet_overlay_key_feed(btn_id_t id, btn_evt_t evt)
     }
     if (id == BTN_ID_MODE) {
         if (evt == BTN_EVT_PRESS_DOWN) {
+            /* ★★ 2026-11-19（用户定案）：**不在 AI 对话界面**时，MODE 键改成 RGB 开关。
+             *   动机："有时候觉得 RGB 很烦"，但为了关个灯去开对话面板太重。
+             *   · 面板没开（非对话界面）⇒ 按下即翻转 LED 总开关，**不建会话、不开面板**；
+             *   · 面板开着 ⇒ 保持原来的"按住说话（PTT）"语义，一个字都不改。
+             *   ★ 想说话还是能说：SET 键开面板（overlay_open），进面板后 MODE 就是 PTT。
+             *   ★ 只在 PRESS_DOWN 翻一次：一次按下只切一次，不会因为长按被反复切。 */
+            if (!s_visible) {
+                s_rgb_on = !s_rgb_on;
+                led_service_set_on(s_rgb_on);
+                ESP_LOGI(TAG, "MODE: RGB %s (chat panel closed)", s_rgb_on ? "ON" : "OFF");
+                return;
+            }
             xiaozhi_state_t st = xiaozhi_service_get_state();
             if (st == XZ_STATE_CHATTING) {
                 s_hw_ptt_ui = (xiaozhi_service_ptt_start() == ESP_OK);

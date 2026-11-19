@@ -3,6 +3,9 @@ build/
 sdkconfig.old
 sdkconfig.defaults.esp32s3
 
+# 本地诊断截图（联调时抓的屏，不入库）
+.screenshots/
+
 # Managed components (restored by idf.py reconfigure)
 managed_components/
 

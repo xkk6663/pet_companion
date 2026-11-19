@@ -38,6 +38,10 @@ extern "C" {
  *   ⚠ 用之前先确认 sdkconfig 里 20 号真的开了 —— 没开的话这里是指向空结构的
  *     未定义符号，链接期就会失败（fail loud，不算坏事）。 */
 #define UI_FONT_BIG   (&lv_font_montserrat_20)
+/* ★ 陪伴计时专用：全工程最大的字号（48 px）。
+ *   依赖 sdkconfig 的 CONFIG_LV_FONT_MONTSERRAT_48=y —— 没开就是未定义符号，
+ *   链接期直接失败（fail loud）。开 48 只多占约 4 KB flash（5 个字符集）。 */
+#define UI_FONT_HUGE  (&lv_font_montserrat_48)
 
 #ifdef __cplusplus
 }

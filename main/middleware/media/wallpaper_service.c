@@ -31,6 +31,7 @@
 #include "wallpaper_service.h"
 #include "middleware/periph/fs_service.h"       /* FS_MNT_PATH + file_buffer（buffer0 借用方） */
 #include "middleware/periph/sdcard_service.h"   /* SDCARD_MNT_PATH + is_mounted */
+#include "middleware/periph/flash_guard.h"      /* P0：NVS 写前静默取景/音乐 */
 #include "middleware/mem_diag.h"
 
 static const char *TAG = "WP_SVC";
@@ -256,9 +257,16 @@ static int pick_random(const wp_name_t *list, int n, const char *avoid)
  */
 static void save_last(const char *name)
 {
+    /* ★ P0：NVS 擦写会关 cache ~100 ms，先停取景/暂停音乐；录像中直接跳过
+     *   这次记忆（下一轮 10 min 再写，不值得为一条壁纸名打断录像）。 */
+    if (flash_guard_begin("wallpaper-last") != ESP_OK) {
+        ESP_LOGW(TAG, "flash busy, skip last-wallpaper NVS write (will retry next rotation)");
+        return;
+    }
     nvs_handle_t h;
     if (nvs_open(WP_NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
         ESP_LOGW(TAG, "nvs_open failed, last-wallpaper not saved");
+        flash_guard_end();
         return;
     }
     if (nvs_set_str(h, WP_NVS_KEY_LAST, name) != ESP_OK ||
@@ -266,6 +274,7 @@ static void save_last(const char *name)
         ESP_LOGW(TAG, "nvs write failed");
     }
     nvs_close(h);
+    flash_guard_end();
 }
 
 /** 读上次壁纸名。@return true = 读到且非空。 */

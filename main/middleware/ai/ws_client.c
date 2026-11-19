@@ -49,6 +49,7 @@
 #include "esp_websocket_client.h"
 
 #include "ws_client.h"
+#include "middleware/periph/flash_guard.h"
 
 static const char *TAG = "WS";
 
@@ -565,9 +566,14 @@ esp_err_t ws_client_set_uri(const char *uri)
         return ESP_ERR_INVALID_SIZE;
     }
     nvs_handle_t h;
+    esp_err_t ge = flash_guard_begin("ws-uri");
+    if (ge != ESP_OK) {
+        return ge;
+    }
     esp_err_t err = nvs_open(WS_NVS_NS, NVS_READWRITE, &h);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "nvs_open failed: %s", esp_err_to_name(err));
+        flash_guard_end();
         return err;
     }
     err = nvs_set_str(h, WS_NVS_KEY_BASE, uri);
@@ -575,6 +581,7 @@ esp_err_t ws_client_set_uri(const char *uri)
         err = nvs_commit(h);
     }
     nvs_close(h);
+    flash_guard_end();
     if (err != ESP_OK) {
         return err;
     }

@@ -16,6 +16,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "middleware/mem_diag.h"
+#include "middleware/periph/flash_guard.h"
 #include <string.h>
 
 /* gcc -Werror=stringop-truncation: 本文件 strncpy 均按 sizeof(dst)-1 拷贝并由
@@ -73,9 +74,16 @@ static esp_err_t store_load(wifi_store_t *store)
 
 static esp_err_t store_commit(const wifi_store_t *store)
 {
+    /* ★ P0：用户改 Wi-Fi 时才写 NVS，但此时可能正在放歌/开取景。
+     *   先静默，写完恢复；录像中拒绝，返回错误让 UI 提示"稍后再试"。 */
+    esp_err_t ge = flash_guard_begin("wifi-creds");
+    if (ge != ESP_OK) {
+        return ge;
+    }
     nvs_handle_t h;
     esp_err_t err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &h);
     if (err != ESP_OK) {
+        flash_guard_end();
         return err;
     }
     err = nvs_set_blob(h, WIFI_NVS_KEY, store, sizeof(*store));
@@ -83,6 +91,7 @@ static esp_err_t store_commit(const wifi_store_t *store)
         err = nvs_commit(h);
     }
     nvs_close(h);
+    flash_guard_end();
     return err;
 }
 

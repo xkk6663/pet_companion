@@ -101,6 +101,14 @@ typedef struct {
 void record_video_service_init(void);
 
 /**
+ * @brief 启动一次性后台任务，扫描 /sdcard/videos 下的 .avi 并修复掉电文件
+ *        （缺 idx1 / RIFF 与 movi size 仍为 0）。
+ * 只在开机调用一次；SD 未挂载时直接跳过。任务优先级低、钉 Core0，
+ * 不与 LVGL/相机抢 Core1，跑完自删。
+ */
+void record_video_service_repair_start(void);
+
+/**
  * @brief 开始录像（**非阻塞**）
  *
  * @return ESP_OK              已受理

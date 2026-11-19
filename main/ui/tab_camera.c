@@ -35,6 +35,7 @@
 #include "middleware/face_db/face_db.h"         /* ★ S8-1：ENROLL 态的准入判据 + 入库 */
 #include "middleware/periph/sdcard_service.h"   /* ★ S8-2：拒绝日志要报 SD 挂载状态 */
 #include "middleware/net/net_time_service.h"    /* ★ S8-3：打卡时间（自带"可信"判定） */
+#include "middleware/periph/companion_stats.h"  /* ★ 陪伴时长累计存档（按日期分桶写 SD） */
 #include "middleware/mem_diag.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -124,6 +125,28 @@ static lv_obj_t *s_btn_mode_label;
 /* ★ §73.12：原 HSV 专用的 s_bbox（黄色框）已随功能删除；s_face_bbox 不受影响。 */
 static lv_obj_t *s_face_bbox;        /* 检测结果框（FACE 脸 / HAND 手）复用 */
 static lv_obj_t *s_gest_label;       /* ★ §60：手势名标签（HAND 档显示） */
+
+/* ★ P1 / 陪伴计时：原"18 px 青色环 EMA 跟随人脸框"已改为**在场状态环**。
+ *   理由（用户 2026-11-19 定案）：固定屏 + 固定相机，环跟着脸跑不产生任何新信息，
+ *   只是一段装饰；改成"有人=呼吸亮 / 没人=熄灭"之后，它才有明确语义 ——
+ *   和旁边的陪伴计时同源，一眼就能读出"它在不在陪你"。
+ *   ★ 环不再有坐标，也不再 EMA；只由 s_face_in_view 驱动。 */
+static lv_obj_t *s_presence_ring;
+static lv_obj_t *s_companion_label;
+static lv_obj_t *s_left_col;          /* 画布左侧竖列：环 / 陪伴计时 / 日期时分秒 */
+static bool      s_face_in_view;      /* 本次检测是否给出了最大框（= 有人在） */
+static bool      s_companion_on;      /* 计时是否在累加 */
+static bool      s_companion_paused;  /* 用户按了暂停：冻结显示 + 停止累加 */
+static int64_t   s_companion_t0_us;   /* 本段计时的起点 */
+static int64_t   s_companion_base_s;  /* 暂停前已经累计的秒（恢复后从它接着走） */
+static int64_t   s_companion_put_s;   /* 已经提交进 companion_stats 的秒（算增量用） */
+static int64_t   s_face_seen_us;      /* 最近一次"看到脸"的时刻（3 s 宽限用） */
+static int32_t   s_companion_drawn_s; /* 上一次已绘制的秒数（-1 = 需要立刻重画） */
+static uint32_t  s_ring_tick;         /* 呼吸相位（50 ms 一拍） */
+static lv_obj_t *s_btn_pause;         /* 右侧圆形暂停/继续按钮 */
+static lv_obj_t *s_btn_pause_label;
+static lv_obj_t *s_total_label;       /* 竖列最下：SD 总池读数（TOTAL hh:mm:ss） */
+static void total_label_refresh(void);   /* 前置声明：pause_btn_cb 比定义处更靠前 */
 /* ★ §62：原 POSE 档的 17 个关节点对象（s_kp[17]）已随该档一并删除。 */
 static lv_obj_t *s_recog_label;      /* ★ S8-2：识别/打卡结果标签（画布底部） */
 static lv_obj_t *s_status;
@@ -505,6 +528,43 @@ static void punch_btn_cb(lv_event_t *e)
     s_punch_armed       = true;
     s_punch_window_ms   = (int)win_ms;
     s_punch_deadline_us = now_us() + win_ms * 1000;
+}
+
+/* ★ 暂停/继续陪伴计时（右侧圆形按钮）。
+ *  · 暂停 = 冻结读数 + 停止累加 + 立刻把这段增量落盘（防止"暂停后直接断电"丢时间）；
+ *  · 恢复 = 从冻结值接着走；若此刻没人在 → 直接归零（不让它空转累加）。
+ *  · 暂停中"人走开"不清零：那是用户主动中断，不是人离开。 */
+static void pause_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    s_companion_paused = !s_companion_paused;
+
+    int64_t now = esp_timer_get_time();
+    if (s_companion_paused) {
+        if (s_companion_on) {
+            /* 把"运行段"的秒数并进 base，然后冻结 */
+            s_companion_base_s += (now - s_companion_t0_us) / 1000000;
+            s_companion_t0_us   = now;
+            int64_t delta = s_companion_base_s - s_companion_put_s;
+            if (delta > 0) {
+                (void)companion_stats_add(delta);
+                s_companion_put_s = s_companion_base_s;
+            }
+        }
+        (void)companion_stats_flush();
+        total_label_refresh();     /* 暂停即落盘 ⇒ 屏上的 TOTAL 立刻反映 */
+    } else {
+        s_companion_t0_us = now;
+        if (!(s_face_in_view && s_face_on)) {
+            /* 暂停期间人已经走了：恢复即归零，不接着累加一段"没人在"的时间 */
+            s_companion_on      = false;
+            s_companion_base_s  = 0;
+            s_companion_put_s   = 0;
+        }
+    }
+    s_companion_drawn_s    = -1;   /* 强制重画（读数颜色/暂停按钮文案都靠它触发） */
+    s_ring_tick            = 0;
+    ESP_LOGI(TAG, "companion %s", s_companion_paused ? "PAUSED" : "RESUMED");
 }
 
 /* ===========================================================================
@@ -1285,6 +1345,21 @@ static const char *enroll_status(char *buf, size_t n)
     return buf;
 }
 
+/* ★ 总池读数（SD 里的 d_total.txt）：不打开 txt 也能在屏幕上看到累计。
+ *   · 只在"建页 / 每次落盘 / 暂停"时读文件，不参与 50 ms 刷新（读 SD 太贵）；
+ *   · 格式 TOTAL hh:mm:ss（小时位不封顶，99 h 以后变 100+）。 */
+static void total_label_refresh(void)
+{
+    if (!s_total_label) {
+        return;
+    }
+    int64_t t = companion_stats_get_total();
+    char buf[32];
+    snprintf(buf, sizeof(buf), "TOTAL %02lld:%02lld:%02lld",
+             (long long)(t / 3600), (long long)((t / 60) % 60), (long long)(t % 60));
+    lv_label_set_text(s_total_label, buf);
+}
+
 static void refresh(lv_timer_t *t)
 {
     (void)t;
@@ -1394,6 +1469,7 @@ static void refresh(lv_timer_t *t)
         /* ★ S8-1：检测关掉后那份缓存框就过期了。不清的话 ENROLL 态会拿着一张
          *   "上一档位/上一次检测"的旧框给出误导性引导（比如人早就走开了还显示 Ready）。 */
         s_box_valid = false;
+        s_face_in_view = false;
     }
 
     if (s_frame_new && s_last_frame && s_canvas) {
@@ -1445,6 +1521,9 @@ static void refresh(lv_timer_t *t)
                     lv_obj_set_pos(s_face_bbox, vr[idx].x, vr[idx].y);
                     lv_obj_set_size(s_face_bbox, vr[idx].w, vr[idx].h);
                     lv_obj_set_hidden(s_face_bbox, false);
+                    /* ★ 陪伴计时：只要检出最大框就算"人在"（不要求框在画面中心，
+                     *   否则侧坐/半张脸都会被判成"没人"，计时会乱跳零）。 */
+                    s_face_in_view = true;
                     /* ★ S8-1：把"最大框"缓存给 ENROLL 态的质量引导用
                      *   （本块跑在 lv_lock 临界区里，只做一次结构体拷贝，不加负担）。 */
                     s_last_box  = vr[idx];
@@ -1463,10 +1542,118 @@ static void refresh(lv_timer_t *t)
                     lv_obj_set_hidden(s_face_bbox, true);
                     if (s_gest_label) lv_obj_set_hidden(s_gest_label, true);
                     s_box_valid = false;
+                    s_face_in_view = false;
                 }
             }
         }
         lv_unlock();
+    }
+
+    /* ★ 陪伴计时 + 在场状态环（每 50 ms 一拍，纯视觉 + 纯本地计时，不碰业务）。
+     *
+     *  语义（用户定案）：
+     *    · 看到脸 → 开始/继续累加；脸消失超过 3 s → 归零重来；
+     *    · 暂停键 → 冻结显示并停止累加（可再按恢复，从冻结值接着走）；
+     *    · 累计秒数按"当天"（已校时）或 nodate 池（未校时）写进 SD，
+     *      掉电/换页都不丢 —— 与网络无关，网络只决定"记到哪个桶"。
+     *
+     *  ★ 为什么宽限是 3 s：检测是"每 3 帧一次"，转头/眨眼/低头会漏 1~2 拍；
+     *    1 s 时人稍微侧头数字就归零（用户实测嫌太短），3 s 才像"人还在"。
+     *    宏值改成 0 就是"立刻清零"。 */
+#define COMPANION_GRACE_US  3000000LL
+    {
+        int64_t now = esp_timer_get_time();
+        bool seen = s_face_in_view && s_face_on;
+        if (seen) {
+            s_face_seen_us = now;
+        }
+
+        /* 会话开始：有人在、没被暂停 ⇒ 从 0 起算 */
+        if (!s_companion_on && seen && !s_companion_paused) {
+            s_companion_on     = true;
+            s_companion_base_s = 0;
+            s_companion_put_s  = 0;
+            s_companion_t0_us  = now;
+            s_companion_drawn_s = -1;
+        }
+
+        /* 人走了（超过宽限）：把这段的增量落盘，然后清零。
+         * ★ 暂停中不清零：暂停是"用户主动中断"，人走开也不该把读数抹掉。 */
+        if (s_companion_on && !s_companion_paused && !seen &&
+            (now - s_face_seen_us) > COMPANION_GRACE_US) {
+            int64_t total = s_companion_base_s + (now - s_companion_t0_us) / 1000000;
+            int64_t delta = total - s_companion_put_s;
+            if (delta > 0) {
+                (void)companion_stats_add(delta);
+                s_companion_put_s = total;
+            }
+            (void)companion_stats_flush();
+            total_label_refresh();          /* 总池会跟着涨：同步刷新屏上的 TOTAL */
+            s_companion_on      = false;
+            s_companion_t0_us   = 0;
+            s_companion_base_s  = 0;
+            s_companion_put_s   = 0;
+            s_companion_drawn_s = -1;
+        }
+
+        int32_t sec = 0;
+        if (s_companion_on) {
+            if (s_companion_paused) {
+                sec = (int32_t)s_companion_base_s;      /* 冻结读数 */
+            } else {
+                sec = (int32_t)(s_companion_base_s + (now - s_companion_t0_us) / 1000000);
+                /* 节流：每满 30 s 交一次增量给 companion_stats（它自己再节流落盘） */
+                int64_t delta = (int64_t)sec - s_companion_put_s;
+                if (delta >= 30) {
+                    (void)companion_stats_add(delta);
+                    s_companion_put_s = sec;
+                    /* 每 30 s 落一次盘，屏上的 TOTAL 同步涨一次（不用开 txt 看） */
+                    (void)companion_stats_flush();
+                    total_label_refresh();
+                }
+            }
+        }
+
+        /* ★ 局域网监视面板要的"本次会话"读数：每拍镜像一次（几个标量，没有锁） */
+        companion_stats_report_session(sec, s_companion_on && !s_companion_paused,
+                                        s_companion_paused);
+
+        /* 显示：**恒为 hh:mm:ss**（用户要求带小时位；<1 h 就是 00:MM:SS） */
+        if (s_companion_label && sec != s_companion_drawn_s) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%02d:%02d:%02d",
+                     (int)(sec / 3600), (int)((sec / 60) % 60), (int)(sec % 60));
+            lv_label_set_text(s_companion_label, buf);
+            /* 暂停时换成琥珀色：一眼能看出"是停住了，不是没在动" */
+            lv_obj_set_style_text_color(s_companion_label,
+                                        s_companion_paused ? lv_color_hex(0xF59E0B) : COL_CYAN, 0);
+            s_companion_drawn_s = sec;
+        }
+
+        /* 状态环：有人且没暂停 → 青色呼吸（2 s 一周期）；否则熄灭 */
+        if (s_presence_ring) {
+            if (s_companion_on && !s_companion_paused) {
+                s_ring_tick++;
+                uint32_t ph = s_ring_tick % 40;             /* 40 × 50 ms = 2 s */
+                /* 三角波 0..19..0 → 60..136..60（uint8 范围内，无需再 clamp） */
+                lv_opa_t a  = (lv_opa_t)((ph < 20 ? ph : 40 - ph) * 4 + 60);
+                lv_obj_set_style_border_opa(s_presence_ring, a, 0);
+                lv_obj_set_style_bg_opa(s_presence_ring, (lv_opa_t)(a / 6), 0);
+                lv_obj_set_hidden(s_presence_ring, false);
+            } else {
+                lv_obj_set_hidden(s_presence_ring, true);
+            }
+        }
+
+        /* 暂停按钮外观（唯一写入者，同 FACE/MODEL/MODE） */
+        if (s_btn_pause_label) {
+            const char *want = s_companion_paused ? "RESUME" : "PAUSE";
+            if (strcmp(lv_label_get_text(s_btn_pause_label), want) != 0) {
+                lv_label_set_text_static(s_btn_pause_label, want);
+                lv_obj_set_style_bg_color(s_btn_pause,
+                                          s_companion_paused ? lv_color_hex(0xF59E0B) : COL_CYAN, 0);
+            }
+        }
     }
 
     /* =======================================================================
@@ -1651,11 +1838,14 @@ static void toggle_fullscreen(lv_event_t *e)
         lv_obj_set_parent(s_canvas, s_screen);
         lv_obj_align(s_canvas, LV_ALIGN_CENTER, 0, 0);
     }
-    /* ★ §73.11：两个悬浮元素跟随画布的两种中心 ——
-     *   全屏态画布在内容区正中（偏移 0），普通态在 flex 列里（CAM_VIEW_Y_OFF）。 */
+    /* ★ §73.11：悬浮元素跟随画布的两种中心 ——
+     *   全屏态画布在内容区正中（偏移 0），普通态在 flex 列里（CAM_VIEW_Y_OFF）。
+     *   ★ 打卡按钮现在在底部按钮行里（不是悬浮元素），不再参与这里。 */
     int16_t yoff = s_fullscreen ? 0 : CAM_VIEW_Y_OFF;
-    if (s_btn_punch)  lv_obj_align(s_btn_punch,  LV_ALIGN_RIGHT_MID, -34, yoff);
-    if (s_time_label) lv_obj_align(s_time_label, LV_ALIGN_LEFT_MID,   34, yoff);
+    if (s_btn_pause)  lv_obj_align(s_btn_pause,  LV_ALIGN_RIGHT_MID, -34, yoff);
+    /* ★ 左侧整列（环 + 陪伴计时 + 时间）作为一个整体跟随画布中心，
+     *   不再单独 align s_time_label —— 它现在是 s_left_col 的子对象。 */
+    if (s_left_col)   lv_obj_align(s_left_col,   LV_ALIGN_LEFT_MID,   20, yoff);
 }
 
 /* ★ §73.12：HSV 颜色识别已整体移除（用户要求阉割）——
@@ -1927,6 +2117,72 @@ void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
     lv_obj_set_style_radius(s_face_bbox, 0, 0);
     lv_obj_set_hidden(s_face_bbox, true);
 
+    /* =======================================================================
+     *  ★ 画布左侧竖列：在场状态环 / 陪伴计时（最大字号） / 日期·时分秒
+     *
+     *  · 位置：LEFT_MID +20（用户要求"整列再往左一点点"，原 34 → 20）；
+     *    宽 232 ⇒ 20..252，画布左边缘 x=280 ⇒ 留 28 px 间隙，
+     *    **完全不覆盖取景画面**（用户明确要求）；
+     *  · ignore_layout：不参与纵向 flex，否则会被塞进标题/按钮行；
+     *  · 整列 flex 居中 ⇒ 三块内容作为一个整体垂直居中（用户要求"上下居中"）；
+     *  · 关掉 CLICKABLE：这层只是显示，不能挡住画布的"点开全屏"。
+     * ======================================================================= */
+    s_left_col = lv_obj_create(screen);
+    lv_obj_set_size(s_left_col, 232, LV_SIZE_CONTENT);
+    lv_obj_set_ignore_layout(s_left_col, true);
+    lv_obj_set_style_bg_opa(s_left_col, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_left_col, 0, 0);
+    lv_obj_set_style_pad_all(s_left_col, 0, 0);
+    lv_obj_set_style_pad_row(s_left_col, 6, 0);
+    lv_obj_set_scrollable(s_left_col, false);
+    lv_obj_remove_flag(s_left_col, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(s_left_col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_left_col, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_align(s_left_col, LV_ALIGN_LEFT_MID, 20, CAM_VIEW_Y_OFF);
+
+    /* ① 在场状态环：26 px 青色圆环。有人 → 呼吸（透明度 2 s 一周期），
+     *    没人 → 隐藏。**不再跟随人脸坐标**（固定屏上跟随无信息量，见 §P1 复盘）。 */
+    s_presence_ring = lv_obj_create(s_left_col);
+    lv_obj_set_size(s_presence_ring, 26, 26);
+    lv_obj_set_style_radius(s_presence_ring, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_color(s_presence_ring, lv_color_hex(0x22D3EE), 0);
+    lv_obj_set_style_border_width(s_presence_ring, 3, 0);
+    lv_obj_set_style_bg_color(s_presence_ring, lv_color_hex(0x22D3EE), 0);
+    lv_obj_set_style_bg_opa(s_presence_ring, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(s_presence_ring, 0, 0);
+    lv_obj_set_hidden(s_presence_ring, true);
+
+    /* ② 说明文字：固定标签用 CJK 字体（"陪伴"两个字，动态字库按需加载）。 */
+    {
+        lv_obj_t *cap = lv_label_create(s_left_col);
+        lv_label_set_text_static(cap, "陪伴");
+        lv_obj_set_style_text_font(cap, cjk_font(), 0);
+        lv_obj_set_style_text_color(cap, COL_SUBTEXT, 0);
+    }
+
+    /* ③ 陪伴计时：全工程最大字号（48 px），格式恒为 hh:mm:ss。
+     *   ★ 8 个字符 × 约 27 px ⇒ 约 216 px，仍在 232 px 的列宽内（不会截字）。 */
+    s_companion_label = lv_label_create(s_left_col);
+    lv_label_set_text_static(s_companion_label, "00:00:00");
+    lv_obj_set_style_text_font(s_companion_label, UI_FONT_HUGE, 0);
+    lv_obj_set_style_text_color(s_companion_label, COL_CYAN, 0);
+
+    s_face_in_view = false;
+    s_companion_on = false;
+    s_companion_paused = false;      /* 每次进页面从"计时中"开始（暂停是页内意图） */
+    s_companion_t0_us = 0;
+    s_companion_base_s = 0;
+    s_companion_put_s = 0;
+    s_face_seen_us = 0;
+    s_companion_drawn_s = -1;
+    s_ring_tick = 0;
+
+    /* ★ 进页面：① 跑一次写盘自检（日志里能看到 fopen/fprintf/stat/rename 的
+     *  每一步结果，0 KB 这类问题不用再猜）；② 把 SD 里的总池读出来先显示上。 */
+    companion_stats_selftest();
+    total_label_refresh();
+
     /* ★ §60 手势名标签（HAND 档；画布顶部居中小字，深底亮字） */
     s_gest_label = lv_label_create(s_canvas);
     lv_label_set_text_static(s_gest_label, "");
@@ -2013,6 +2269,26 @@ void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
     lv_obj_set_style_text_font(s_btn_face_label, UI_FONT, 0);
     lv_obj_center(s_btn_face_label);
 
+    /* ★ 打卡按钮：**移到底部按钮行正中**（用户 2026-11-19 定案）。
+     *   · 放在 5 个按钮的第 3 位 ⇒ 视觉上正好在整行正中；
+     *   · 尺寸跟同行的 140x60 一致（原来是右侧 96x96 的圆形主操作，
+     *     移进功能行后统一成"药丸"样式，视觉上不再是悬浮主操作）；
+     *   · 行宽校算：5×140 + 4×12 = 748 ≤ 760，不会被挤出可视区。
+     *   ★ 只在 USER 态可见（ENROLL 态由 refresh() 隐藏）：ENROLL 有自己的"START"流程。 */
+    s_btn_punch = lv_btn_create(btn_row);
+    lv_obj_set_size(s_btn_punch, 140, 60);
+    lv_obj_set_style_radius(s_btn_punch, 30, 0);
+    lv_obj_set_style_bg_color(s_btn_punch, COL_GREEN, 0);
+    lv_obj_set_style_shadow_width(s_btn_punch, 0, 0);
+    lv_obj_add_event_cb(s_btn_punch, punch_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_btn_punch_label = lv_label_create(s_btn_punch);
+    /* ★ 定值标签一律用 UI_FONT：bin 字体是 28 px 且字表只为"人名"准备，
+     *   拿去套固定的英文短标签会被撑变形（见 ui_binfont.h 的使用禁区）。 */
+    lv_label_set_text_static(s_btn_punch_label, "PUNCH");
+    lv_obj_set_style_text_color(s_btn_punch_label, COL_DARK, 0);
+    lv_obj_set_style_text_font(s_btn_punch_label, UI_FONT, 0);
+    lv_obj_center(s_btn_punch_label);
+
     /* ★ S1 新增：档位切换按钮。显示当前（或正在切往的）档位短文案。
      *   ★ 初值取真状态而非写死 "224" —— 若改成过常驻的档位，写死就会先闪一下错的。
      *   ★ label 文本来自 face_service 内部的**静态**字符串表 ⇒ set_text_static 安全
@@ -2044,62 +2320,59 @@ void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
     lv_obj_center(s_btn_mode_label);
 
     /* =======================================================================
-     *  ★★★ 2026-09-28：右侧**圆形打卡按钮**（USER 态的主操作）
+     *  ★★★ 2026-11-19：右侧**圆形暂停按钮**（陪伴计时可中断）
      *
      *  · 位置：`LV_ALIGN_RIGHT_MID` + `ignore_layout` ⇒ 悬浮在取景画面右侧，
-     *    **不参与**那条纵向 flex —— 否则会被塞到按钮行下面，还要重算 760 的行宽
-     *    （那行宽度是算出来的，动它会连锁出"最后一个按钮被挤出可视区"）。
-     *  · 圆形用 `LV_RADIUS_CIRCLE`（LVGL 取边长一半）：写死半径的话，以后改尺寸
-     *    就变成圆角矩形，"圆圆的按钮"这条需求会静默失效。
-     *  · 96x96 明显大于底部 140x60 的功能按钮 ⇒ 视觉层级上表明"这是主操作"。
-     *  · 水平偏移 -34：画布 240 宽居中 ⇒ 右边缘在 x=520；按钮左边缘 = 800-34-96 = 670，
-     *    中间留 150 px 空隙，不会盖住取景画面。
-     *  ★ 只在 USER 态可见（ENROLL 态由 refresh() 隐藏）：ENROLL 有自己的"START"流程，
-     *    两颗语义不同的启动按钮并存只会让人按错。
+     *    **不参与**那条纵向 flex；水平偏移 -34：画布右边缘 x=520，
+     *    按钮左边缘 = 800-34-96 = 670 ⇒ 中间留 150 px，**不压画面**。
+     *  · 96x96 圆形（LV_RADIUS_CIRCLE）—— 与左侧竖列形成视觉平衡；
+     *  · 文案/颜色由 refresh() 的陪伴块**唯一**写入（PAUSE 青 / RESUME 琥珀）。
      * ======================================================================= */
-    s_btn_punch = lv_btn_create(screen);
-    lv_obj_set_size(s_btn_punch, PUNCH_BTN_SIZE, PUNCH_BTN_SIZE);
-    lv_obj_set_style_radius(s_btn_punch, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_btn_punch, COL_GREEN, 0);
-    lv_obj_set_style_shadow_width(s_btn_punch, 0, 0);
-    lv_obj_set_ignore_layout(s_btn_punch, true);
-    /* ★ §73.11：y 偏移 CAM_VIEW_Y_OFF —— 画布在 flex 列里的真实中心是
-     *   y≈165（内容区坐标），不是内容区中心 216；旧版对齐内容区中心
-     *   ⇒ 按钮比取景画面低 51 px（用户实测"往上移一点"）。
-     *   全屏态 toggle_fullscreen() 会把它改回 0（那时画布确实在正中）。 */
-    lv_obj_align(s_btn_punch, LV_ALIGN_RIGHT_MID, -34, CAM_VIEW_Y_OFF);
-    lv_obj_add_event_cb(s_btn_punch, punch_btn_cb, LV_EVENT_CLICKED, NULL);
-    s_btn_punch_label = lv_label_create(s_btn_punch);
-    /* ★ 定值标签一律用 UI_FONT：bin 字体是 28 px 且字表只为"人名"准备，
-     *   拿去套固定的英文短标签会被撑变形（见 ui_binfont.h 的使用禁区）。 */
-    lv_label_set_text_static(s_btn_punch_label, "PUNCH");
-    lv_obj_set_style_text_color(s_btn_punch_label, COL_DARK, 0);
-    lv_obj_set_style_text_font(s_btn_punch_label, UI_FONT, 0);
-    lv_obj_center(s_btn_punch_label);
+    s_btn_pause = lv_btn_create(screen);
+    lv_obj_set_size(s_btn_pause, PUNCH_BTN_SIZE, PUNCH_BTN_SIZE);
+    lv_obj_set_style_radius(s_btn_pause, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_btn_pause, COL_CYAN, 0);
+    lv_obj_set_style_shadow_width(s_btn_pause, 0, 0);
+    lv_obj_set_ignore_layout(s_btn_pause, true);
+    /* y 偏移 CAM_VIEW_Y_OFF：与取景画面的真实中心对齐（同打卡按钮的历史原因），
+     * 全屏态由 toggle_fullscreen() 改回 0。 */
+    lv_obj_align(s_btn_pause, LV_ALIGN_RIGHT_MID, -34, CAM_VIEW_Y_OFF);
+    lv_obj_add_event_cb(s_btn_pause, pause_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_btn_pause_label = lv_label_create(s_btn_pause);
+    lv_label_set_text_static(s_btn_pause_label, "PAUSE");
+    lv_obj_set_style_text_color(s_btn_pause_label, COL_DARK, 0);
+    lv_obj_set_style_text_font(s_btn_pause_label, UI_FONT, 0);
+    lv_obj_center(s_btn_pause_label);
 
     /* =======================================================================
      *  ★★★ 2026-09-28 新增：画布**左侧**的两行时间显示（打卡系统的"现在几点"）
      *
-     *  · 与右侧的打卡按钮**镜像对称**（LEFT_MID +34 ↔ RIGHT_MID -34），
-     *    画布 240 宽居中 ⇒ 左边缘 x=280，标签从 x=34 起，互不重叠；
+     *  · 现在挂在 s_left_col 竖列里（环 → 陪伴计时 → 这里），随整列一起垂直居中，
+     *    因此**不再自己 align、也不再 ignore_layout** —— 交给列的 flex 管；
      *  · 第一行 `年.月.日`，第二行 `时:分:秒`（具体到秒，用户要求）；
      *  · **只在已校时（net_time_t.valid）时显示** —— 断网/没拿到时间就整块隐藏，
      *    绝不显示 `---- -- --` 这种占位横线（用户明确说"不显示时间"）。
      *    这与打卡水印的时间判据（punch_service 用同一个 net_time_service，
      *    无效时文件名退化为序号而不是 1970）是**同一套真相源**。
-     *  · ignore_layout：不参与纵向 flex（同打卡按钮的理由）。
      * ======================================================================= */
-    s_time_label = lv_label_create(screen);
+    s_time_label = lv_label_create(s_left_col);
     lv_label_set_text_static(s_time_label, "");
-    lv_obj_set_ignore_layout(s_time_label, true);
-    /* ★ §73.11：与打卡按钮同一条垂直基准（画布中心，CAM_VIEW_Y_OFF），
-     *   两行文本**互相中心对齐**（LV_TEXT_ALIGN_CENTER）——
-     *   "2026.09.29" 比 "09:45:20" 宽，左对齐会让两行看起来错位。 */
-    lv_obj_align(s_time_label, LV_ALIGN_LEFT_MID, 34, CAM_VIEW_Y_OFF);
+    /* 两行文本**互相中心对齐**（LV_TEXT_ALIGN_CENTER）——
+     * "2026.09.29" 比 "09:45:20" 宽，左对齐会让两行看起来错位。 */
     lv_obj_set_style_text_color(s_time_label, COL_TEXT, 0);
     lv_obj_set_style_text_font(s_time_label, UI_FONT_BIG, 0);
     lv_obj_set_style_text_align(s_time_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_hidden(s_time_label, true);      /* 初值隐藏，refresh() 按校时状态放开 */
+
+    /* ⑤ 总池读数：SD 里 d_total.txt 的值（"计时器每跳一秒，总池就涨"）。
+     *   · 不打开 txt、不用读卡器 —— 屏幕上直接看；
+     *   · 只在建页 / 每次落盘 / 暂停时读文件（50 ms 刷新里读 SD 太贵）；
+     *   · 用小字号（14 px），跟在日期时间下面，不抢 48 px 主计数的视觉。 */
+    s_total_label = lv_label_create(s_left_col);
+    lv_label_set_text_static(s_total_label, "TOTAL 00:00:00");
+    lv_obj_set_style_text_color(s_total_label, COL_SUBTEXT, 0);
+    lv_obj_set_style_text_font(s_total_label, UI_FONT, 0);
+    lv_obj_set_style_text_align(s_total_label, LV_TEXT_ALIGN_CENTER, 0);
 
     /* =======================================================================
      *  ★★ S8-1 补完：录入的姓名输入覆盖层（默认隐藏）
@@ -2234,6 +2507,26 @@ void tab_camera_destroy(void)
      *   （旧版这里没清 s_btn_face / s_btn_face_label / s_face_bbox，
      *    页面销毁后它们仍指向已释放的 LVGL 对象 —— refresh() 里一旦用到就是 UAF）。 */
     s_btn_face = NULL; s_btn_face_label = NULL; s_face_bbox = NULL;
+    s_presence_ring = NULL; s_companion_label = NULL; s_left_col = NULL;
+    s_btn_pause = NULL; s_btn_pause_label = NULL; s_total_label = NULL;
+    /* ★ 离开页面：把这段计时剩下的增量落盘（不足 30 s 的碎片不然就丢了） */
+    if (s_companion_on) {
+        int64_t now = esp_timer_get_time();
+        int64_t total = s_companion_base_s;
+        if (!s_companion_paused) {
+            total += (now - s_companion_t0_us) / 1000000;
+        }
+        int64_t delta = total - s_companion_put_s;
+        if (delta > 0) {
+            (void)companion_stats_add(delta);
+        }
+    }
+    (void)companion_stats_flush();
+    /* 离开页面：监视面板的"本次会话"归零（否则 Web 上会停在一个旧读数） */
+    companion_stats_report_session(0, false, false);
+    s_face_in_view = false; s_companion_on = false; s_companion_paused = false;
+    s_companion_t0_us = 0; s_companion_base_s = 0; s_companion_put_s = 0;
+    s_face_seen_us = 0; s_companion_drawn_s = -1; s_ring_tick = 0;
     s_btn_model = NULL; s_btn_model_label = NULL;
     s_btn_mode = NULL; s_btn_mode_label = NULL;      /* ★ S8-1 */
     s_btn_punch = NULL; s_btn_punch_label = NULL;    /* ★ 手动打卡按钮（页面子对象） */

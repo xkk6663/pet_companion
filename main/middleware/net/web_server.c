@@ -43,9 +43,15 @@
 #include "lwip/sockets.h"
 
 #include "middleware/periph/sdcard_service.h"
+#include "middleware/periph/companion_stats.h"      /* ★ 陪伴时长：监视面板数据源 */
+#include "middleware/net/net_time_service.h"       /* ★ 校时状态（今日桶名字） */
 #include "middleware/camera/punch_service.h"
+#include "middleware/camera/camera_service.h"       /* P1：/stream.mjpg 低分辨率预览 */
 #include "middleware/camera/capture_service.h"      /* ★ S9 §3.5：/api/media/capture */
 #include "middleware/camera/jpeg_util.h"            /* ★ §76：截图 JPEG 软编 */
+#include "middleware/media/record_video_service.h"  /* P1：录像中拒绝 MJPEG */
+#include "middleware/periph/boot_guard.h"           /* P0：/api/recovery/clear */
+#include "middleware/periph/flash_guard.h"          /* P0：flash 窗口内给 MJPEG 降速 */
 #include "middleware/net/screen_shot.h"             /* ★ §76：RGB framebuffer 直读 */
 #include "middleware/media/avi_mjpeg_demuxer.h"
 #include "middleware/media/wallpaper_service.h"     /* ★ §75 补充 2：壁纸管理 */
@@ -231,6 +237,75 @@ static esp_err_t handler_index(httpd_req_t *req)
     size_t len = (size_t)(web_index_end - web_index_start);
     esp_err_t e = httpd_resp_send(req, (const char *)web_index_start, (ssize_t)len);
     ESP_LOGI(TAG, "index sent %u B (%s)", (unsigned)len, esp_err_to_name(e));
+    return e;
+}
+
+/* ---------------------------------------------------------------------------
+ *  Handler：GET /api/companion/stats  陪伴时长快照（2 s 轮询）
+ *
+ *  一次性把面板要的东西全给出去：本次会话读数 + 今日/无日期/总池 + 最近 14 天。
+ *  · 会话读数是 UI 的**镜像**（companion_stats_report_session），不碰 LVGL；
+ *  · 桶数据现读 SD（每个文件就几十字节），一次请求最多 14 次读；
+ *  · 手动拼 JSON：字段全是 ASCII + 安全数字，不需要 cJSON 的堆开销。
+ * ------------------------------------------------------------------------- */
+static esp_err_t handler_companion_stats(httpd_req_t *req)
+{
+    log_req(req, "companion/stats");
+
+    bool running = false, paused = false;
+    int32_t sess = companion_stats_get_session(&running, &paused);
+
+    net_time_t nt;
+    memset(&nt, 0, sizeof(nt));
+    net_time_service_get(&nt);
+
+    bool sd = sdcard_service_is_mounted();
+    int64_t total  = companion_stats_get_total();
+    int64_t nodate = companion_stats_get_nodate();
+
+    companion_day_t days[14];
+    int nd = companion_stats_list_days(days, 14);
+
+    char today[12] = "";
+    int64_t today_s = 0;
+    if (nt.valid) {
+        snprintf(today, sizeof(today), "%04d-%02d-%02d", nt.year, nt.mon, nt.day);
+        for (int i = 0; i < nd; i++) {
+            if (strcmp(days[i].date, today) == 0) {
+                today_s = days[i].sec;
+                break;
+            }
+        }
+    }
+
+    size_t cap = 320 + (size_t)nd * 40;
+    char *body = (char *)malloc(cap);
+    if (body == NULL) {
+        return send_json(req, "{\"ok\":0,\"err\":\"oom\"}");
+    }
+
+    int o = snprintf(body, cap,
+                     "{\"ok\":1,\"sd\":%d,\"ntp\":%d,\"today\":\"%s\","
+                     "\"sess\":%d,\"run\":%d,\"paused\":%d,"
+                     "\"today_s\":%lld,\"nodate_s\":%lld,\"total_s\":%lld,\"days\":[",
+                     sd ? 1 : 0, nt.valid ? 1 : 0, today,
+                     (int)sess, running ? 1 : 0, paused ? 1 : 0,
+                     (long long)today_s, (long long)nodate, (long long)total);
+
+    for (int i = 0; i < nd && o > 0 && (size_t)o < cap; i++) {
+        int r = snprintf(body + o, cap - (size_t)o, "%s{\"d\":\"%s\",\"s\":%d}",
+                         (i > 0) ? "," : "", days[i].date, (int)days[i].sec);
+        if (r < 0 || (size_t)r >= cap - (size_t)o) {
+            break;
+        }
+        o += r;
+    }
+    if ((size_t)o < cap) {
+        (void)snprintf(body + o, cap - (size_t)o, "]}");
+    }
+
+    esp_err_t e = send_json(req, body);
+    free(body);
     return e;
 }
 
@@ -1527,10 +1602,234 @@ static esp_err_t handler_display_shot(httpd_req_t *req)
 }
 
 /* ---------------------------------------------------------------------------
+ *  P1：低分辨率 MJPEG 预览（/stream.mjpg）
+ *
+ *  为什么是 240x240 + 软编：
+ *   · 相机 CAM 档本来就是 240x240 RGB565，不需要切 720p，也不和录像抢 JPEG 流；
+ *   · 复用 jpeg_util 的常驻软编器（240x240 Q70 约 20~30 ms），不建新任务、
+ *     不碰硬件 JPEG 编码器（它会和硬解 JPEG 争 2D-DMA，改动记录 §27.1）；
+ *   · 帧回调里只 memcpy 115 KB 到另一块 PSRAM，不在 cam_task 里编码/发送。
+ *  单客户端：第二个人打开会拿到 409，避免两份 115 KB×2 + 64 KB 输出把 PSRAM 打穿。
+ * ------------------------------------------------------------------------- */
+#define MJPG_W        240
+#define MJPG_H        240
+#define MJPG_FRAME_SZ (MJPG_W * MJPG_H * 2)
+
+static uint8_t *s_mj_buf[2];
+static uint8_t *s_mj_out;
+static volatile int  s_mj_front;
+static volatile bool s_mj_new;
+static volatile bool s_mj_in_use;
+static volatile bool s_mj_client;
+static portMUX_TYPE  s_mj_mux = portMUX_INITIALIZER_UNLOCKED;
+
+/* ★ 诊断：设备端相机页占着 1280x720 时，回调会拿到 1280x720 帧（尺寸不符），
+ *   以前是静默丢掉 → 网页端只看到"连上了但没画面"，还容易误判成流坏了。
+ *   这里计数 + 限频打日志，一眼能看出"是相机被 UI 占了"还是"真没帧"。 */
+static volatile uint32_t s_mj_drop_size;
+static volatile uint32_t s_mj_drop_busy;
+
+static void mjpg_frame_cb(const uint8_t *data, uint32_t size,
+                          uint32_t w, uint32_t h, void *user)
+{
+    (void)user;
+    if (data == NULL) {
+        return;
+    }
+    if (w != MJPG_W || h != MJPG_H || size < MJPG_FRAME_SZ) {
+        if ((++s_mj_drop_size % 30) == 1) {
+            ESP_LOGW(TAG, "mjpeg: frame %ux%u ignored (need %dx%d, sz=%u)",
+                     (unsigned)w, (unsigned)h, MJPG_W, MJPG_H, (unsigned)size);
+        }
+        return;
+    }
+    if (s_mj_in_use || s_mj_buf[0] == NULL || s_mj_buf[1] == NULL) {
+        if ((++s_mj_drop_busy % 30) == 1) {
+            ESP_LOGW(TAG, "mjpeg: frame dropped, encoder busy (in_use=%d)", (int)s_mj_in_use);
+        }
+        return;   /* 编码线程正在读，丢这一帧比并发写安全 */
+    }
+
+    int back = s_mj_front ^ 1;
+    memcpy(s_mj_buf[back], data, MJPG_FRAME_SZ);
+
+    taskENTER_CRITICAL(&s_mj_mux);
+    s_mj_front = back;
+    s_mj_new   = true;
+    taskEXIT_CRITICAL(&s_mj_mux);
+}
+
+static esp_err_t handler_stream_mjpg(httpd_req_t *req)
+{
+    log_req(req, "stream.mjpg");
+
+    ESP_LOGI(TAG, "mjpeg: req owner=%d running=%d has_frame_cb=%d",
+             (int)camera_service_owner(), (int)camera_service_is_running(),
+             (int)camera_service_has_frame_cb());
+
+    if (s_mj_client) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "mjpeg stream busy");
+    }
+    if (camera_service_owner() == CAM_OWNER_MEDIA ||
+        record_video_service_state() != VIDEO_REC_IDLE) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        return httpd_resp_send(req, "camera busy with media/recording",
+                               HTTPD_RESP_USE_STRLEN);
+    }
+    /* ★ 设备端相机页（取景器）正在用 1280x720 跑帧回调：这时不能再挂 240x240
+     *   observer（尺寸不符，帧全被丢），也不能去 stop 它的流。明确 409，
+     *   让用户先退出设备上的相机页，而不是给一个没有画面的"成功"响应。 */
+    if (camera_service_is_running() && camera_service_has_frame_cb()) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "text/plain; charset=utf-8");
+        return httpd_resp_send(req,
+                               "camera in use by device UI; close the camera page and retry",
+                               HTTPD_RESP_USE_STRLEN);
+    }
+
+    s_mj_client = true;
+    s_mj_new    = false;
+    s_mj_in_use = false;
+    s_mj_drop_size = 0;
+    s_mj_drop_busy = 0;
+
+    /* ★ 质量可调（/stream.mjpg?q=40）：本机软编实测 q70 单帧 ~770 ms，
+     *   先用一次烧录把"质量-耗时-帧率"曲线扫出来，再定默认值，
+     *   免得每试一个质量都要重新烧片。 */
+    int quality = 40;   /* 实测 q40 → 14.7 KB/帧 1.3 fps；q70 → 24.9 KB 1.1 fps */
+    {
+        char qbuf[8];
+        if (query_get(req, "q", qbuf, sizeof(qbuf)) == ESP_OK) {
+            int v = atoi(qbuf);
+            if (v >= 20 && v <= 90) {
+                quality = v;
+            }
+        }
+    }
+    /* ★ esp_jpeg 要求输入缓冲 16 字节对齐（jpeg_util 里有硬校验，不对齐直接
+     *   返回 ESP_ERR_INVALID_ARG）。heap_caps_malloc 在 PSRAM 上不保证对齐，
+     *   实测会偶发抽到非对齐地址 → 流一帧都发不出，所以这里必须显式对齐分配。 */
+    s_mj_buf[0] = heap_caps_aligned_alloc(16, MJPG_FRAME_SZ, MALLOC_CAP_SPIRAM);
+    s_mj_buf[1] = heap_caps_aligned_alloc(16, MJPG_FRAME_SZ, MALLOC_CAP_SPIRAM);
+    s_mj_out    = heap_caps_aligned_alloc(16, JPEG_UTIL_OUT_MAX, MALLOC_CAP_SPIRAM);
+
+    bool started = false;
+    esp_err_t err = ESP_OK;
+
+    if (!s_mj_buf[0] || !s_mj_buf[1] || !s_mj_out) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    if (!camera_service_is_running()) {
+        err = camera_service_start_fmt_owner(NULL, NULL, CAM_FMT_RGB565,
+                                            MJPG_W, MJPG_H, CAM_OWNER_PREVIEW);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "mjpeg: camera start failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+        started = true;
+    }
+
+    camera_service_set_observer(mjpg_frame_cb, NULL);
+
+    httpd_resp_set_status(req, "200 OK");
+    httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=frame");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Connection", "close");
+
+    int64_t deadline = esp_timer_get_time() + 60LL * 1000 * 1000;
+    int64_t t_start  = esp_timer_get_time();
+    int sent = 0;
+    while (esp_timer_get_time() < deadline) {
+        if (flash_guard_is_active()) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
+        int64_t wait_end = esp_timer_get_time() + 500LL * 1000;
+        while (!s_mj_new && esp_timer_get_time() < wait_end) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        if (!s_mj_new) {
+            continue;
+        }
+
+        taskENTER_CRITICAL(&s_mj_mux);
+        const uint8_t *front = s_mj_buf[s_mj_front];
+        s_mj_new   = false;
+        s_mj_in_use = true;
+        taskEXIT_CRITICAL(&s_mj_mux);
+
+        size_t jpg_len = 0;
+        esp_err_t je = jpeg_util_encode_rgb565_le(front, MJPG_W, MJPG_H, quality,
+                                                  s_mj_out, JPEG_UTIL_OUT_MAX, &jpg_len);
+        s_mj_in_use = false;
+
+        if (je != ESP_OK || jpg_len == 0) {
+            ESP_LOGW(TAG, "mjpeg encode failed: %s", esp_err_to_name(je));
+            break;
+        }
+
+        char part[128];
+        int hlen = snprintf(part, sizeof(part),
+                            "--frame\r\nContent-Type: image/jpeg\r\n"
+                            "Content-Length: %u\r\n\r\n", (unsigned)jpg_len);
+        if (httpd_resp_send_chunk(req, part, hlen) != ESP_OK ||
+            httpd_resp_send_chunk(req, (const char *)s_mj_out, jpg_len) != ESP_OK ||
+            httpd_resp_send_chunk(req, "\r\n", 2) != ESP_OK) {
+            break;   /* 客户端断开/超时：ESP-IDF 返回非 OK */
+        }
+        sent++;
+        vTaskDelay(pdMS_TO_TICKS(20));   /* 只让出 CPU，不额外拖帧率 */
+    }
+    int64_t elapsed_ms = (esp_timer_get_time() - t_start) / 1000;
+    if (elapsed_ms < 1) elapsed_ms = 1;
+    ESP_LOGI(TAG, "mjpeg stream ended: sent=%d q=%d %lldms (%.2f fps) err=%s drop_size=%u drop_busy=%u",
+             sent, quality, (long long)elapsed_ms,
+             (double)sent * 1000.0 / (double)elapsed_ms, esp_err_to_name(err),
+             (unsigned)s_mj_drop_size, (unsigned)s_mj_drop_busy);
+
+cleanup:
+    camera_service_set_observer(NULL, NULL);
+    /* 只在"是我们起的预览、且期间没有别的 tab 接管"时停流；CAM 页若抢回
+     * 了相机（has_frame_cb=true），绝不能替它 stop。 */
+    if (started && camera_service_owner() == CAM_OWNER_PREVIEW &&
+        !camera_service_has_frame_cb()) {
+        camera_service_stop();
+    }
+    if (s_mj_buf[0]) heap_caps_free(s_mj_buf[0]);
+    if (s_mj_buf[1]) heap_caps_free(s_mj_buf[1]);
+    if (s_mj_out)    heap_caps_free(s_mj_out);
+    s_mj_buf[0] = s_mj_buf[1] = s_mj_out = NULL;
+    s_mj_client = false;
+
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                   esp_err_to_name(err));
+    }
+    return ESP_OK;
+}
+
+/* ---------------------------------------------------------------------------
+ *  P0：安全模式出口。清掉启动失败计数后，用户再点 /api/system/reboot。
+ * ------------------------------------------------------------------------- */
+static esp_err_t handler_api_recovery_clear(httpd_req_t *req)
+{
+    log_req(req, "recovery/clear");
+    boot_guard_clear();
+    const char *body = "{\"ok\":1,\"msg\":\"boot counter cleared; reboot to leave safe mode\"}";
+    httpd_resp_set_type(req, "application/json; charset=utf-8");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+/* ---------------------------------------------------------------------------
  *  启动
  * ------------------------------------------------------------------------- */
 static const httpd_uri_t s_uris[] = {
     { .uri = "/",                    .method = HTTP_GET,    .handler = handler_index,             .user_ctx = NULL },
+    { .uri = "/api/companion/stats", .method = HTTP_GET,    .handler = handler_companion_stats,   .user_ctx = NULL },
     { .uri = "/api/punch/last",      .method = HTTP_GET,    .handler = handler_punch_last,        .user_ctx = NULL },
     { .uri = "/api/attendance/list", .method = HTTP_GET,    .handler = handler_attendance_list,   .user_ctx = NULL },
     { .uri = "/api/media/list",      .method = HTTP_GET,    .handler = handler_media_list,        .user_ctx = NULL },
@@ -1551,6 +1850,9 @@ static const httpd_uri_t s_uris[] = {
     { .uri = "/api/system/reboot",   .method = HTTP_POST,   .handler = handler_api_reboot,        .user_ctx = NULL },
     { .uri = "/api/system/status",   .method = HTTP_GET,    .handler = handler_api_status,        .user_ctx = NULL },
     { .uri = "/api/action/result",   .method = HTTP_GET,    .handler = handler_api_result,        .user_ctx = NULL },
+    /* ---- P0/P1：安全模式出口 + 低分辨率实时预览 ---- */
+    { .uri = "/api/recovery/clear",  .method = HTTP_POST,   .handler = handler_api_recovery_clear, .user_ctx = NULL },
+    { .uri = "/stream.mjpg",         .method = HTTP_GET,    .handler = handler_stream_mjpg,       .user_ctx = NULL },
     /* ---- §76 设备端真实界面抓取（RGB framebuffer）---- */
     { .uri = "/api/display/frame",   .method = HTTP_GET,    .handler = handler_display_frame,     .user_ctx = NULL },
     { .uri = "/api/display/shot",    .method = HTTP_GET,    .handler = handler_display_shot,      .user_ctx = NULL },
@@ -1578,11 +1880,17 @@ esp_err_t web_server_init(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;                  /* 流式 handler + snprintf 需要 */
-    cfg.max_uri_handlers = 26;              /* 8 只读 + 4 管理 + 8 动作 + 2 屏幕抓取（§76） */
+    cfg.max_uri_handlers = 30;              /* 原 26 + recovery/clear + stream.mjpg 等余量 */
     cfg.recv_wait_timeout = 10;
     cfg.send_wait_timeout = 10;             /* 客户端停读时尽快释放单任务 httpd */
     cfg.keep_alive_enable = false;          /* 每个请求独立连接，避免半死 keep-alive 卡住服务 */
     cfg.lru_purge_enable = true;            /* fd 紧张时挤掉最久未用的连接 */
+    /* ★ 实测软编 240x240 q70 单帧墙钟 770 ms（模块文档预期 20~60 ms），
+     *   说明不是算法慢，而是 httpd 任务被同级/更高优先级的音频 AFE 抢得没 CPU。
+     *   把 httpd 提到 prio 7 并钉到 core1（AFE 在 core0），让编码真正跑满；
+     *   只影响"有人在看流"的这一小段时间，音频不挪核。 */
+    cfg.task_priority = 7;
+    cfg.core_id       = 1;
 
     httpd_handle_t server = NULL;
     esp_err_t e = httpd_start(&server, &cfg);
