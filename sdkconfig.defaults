@@ -212,6 +212,16 @@ CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
 ##    TTS 源码率 48 KB/s ⇒ 供给不足 ⇒ 边下边播每 0.3 s 见底一次（§26.1 / §30）。
 ##    代价：BA 窗口只决定在途帧数，RX 缓冲本身走 PSRAM（见 ①），不动内部 RAM。
 CONFIG_ESP_WIFI_RX_BA_WIN=16
+
+## ④ TCP 发送/接收窗口 5760 → 65535（2026-11-17 抓图实测）
+##    现场：设备 10.115.126.252，PC ping 均值 31 ms（6~73 ms）。
+##    5760 B 窗口的理论上限 = 5760 / 0.031 ≈ 186 KB/s；实测静态 index.html 87 KB/s、
+##    768 KB 原始帧 5.4 s，与 BDP 完全吻合 —— 抓图慢是 TCP 窗口限制，不是 PSRAM 拷贝。
+##    lwIP 未开 WND_SCALE，65535 是 Kconfig 上限；lwIP 缓冲本就走 PSRAM（见上）。
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
+CONFIG_LWIP_TCP_WND_DEFAULT=65535
+## ⑤ TX AMPDU BA 窗口 6 → 16：窗口放大后需要有足够的在途聚合帧才能填满 BDP。
+CONFIG_ESP_WIFI_TX_BA_WIN=16
 ## ② PHY 校准数据落 NVS：关联/重连窗口内那几次 94~157 ms 关中断的**嫌疑之一**
 ##    （flash 擦写 → spi_flash_disable_interrupts_caches_and_other_cpu）。已排除的两个写点：
 ##    `esp_wifi_set_config()`（已改 WIFI_STORAGE_RAM）与 `save_connected_cred()`

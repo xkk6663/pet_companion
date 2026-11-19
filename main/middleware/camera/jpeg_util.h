@@ -84,6 +84,20 @@ esp_err_t jpeg_util_encode_rgb888(const uint8_t *rgb, int w, int h, int quality,
                                   uint8_t *out, size_t out_cap, size_t *out_len);
 
 /**
+ * @brief 把一张 RGB565（小端）图像编码成 JPEG 码流。
+ *
+ * 与 `jpeg_util_encode_rgb888` 共用同一个常驻编码器（句柄缓存键包含像素格式），
+ * 供屏幕截图等"原生 RGB565 缓冲"直接编码，省掉一次 3 倍大小的 RGB888 转换。
+ *
+ * @param rgb565   输入像素，`w * h * 2` 字节。**必须 16 字节对齐**。
+ * @param out_cap  输出容量；800x480 Q80 建议 `SCREEN_SHOT_JPEG_MAX`（256 KB）。
+ * @note 线程安全（内部互斥）。会阻塞（800x480 软编约数百 ms），
+ *       不得在 LVGL 线程或 cam_task 的帧回调里调。
+ */
+esp_err_t jpeg_util_encode_rgb565_le(const uint8_t *rgb565, int w, int h, int quality,
+                                     uint8_t *out, size_t out_cap, size_t *out_len);
+
+/**
  * @brief 释放常驻编码器（幂等）。一般**不需要**调 —— 它是常驻复用的小对象；
  *        仅在"要彻底归还 PSRAM"的场景（如长时录像前）才有必要。
  */

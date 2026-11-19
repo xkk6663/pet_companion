@@ -34,6 +34,8 @@ idf_component_register(SRCS
                         "middleware/net/net_time_service.c"
                         ## ---- §74：网页管理端（APSTA 热点/局域网浏览器管理）----
                         "middleware/net/web_server.c"
+                        ## ---- §76：设备端真实界面抓取（RGB framebuffer → BMP/JPEG）----
+                        "middleware/net/screen_shot.c"
                         "middleware/periph/fs_service.c"
                         "middleware/periph/sdcard_service.c"
                         "middleware/periph/led_service.c"
@@ -107,6 +109,8 @@ idf_component_register(SRCS
                                     ##   组件已在依赖树里（esp_websocket_client v1.8.0），这里只声明依赖
                                     esp_websocket_client
                                     esp_http_client esp_http_server cjson mbedtls zlib esp_video esp_cam_sensor esp32_s31_korvo_1
+                                    ## ★ §76：screen_shot.c 直接 include esp_lcd_panel_rgb.h
+                                    esp_lcd
                                     ## ★ 同步呼吸灯：led_service 直接驱动 WS2812（不再走 led_indicator 的
                                     ##   blink 引擎），需要 led_strip 的 set_pixel/refresh。
                                     ##   写全名（managed component 的注册名），不依赖短名别名

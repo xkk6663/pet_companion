@@ -45,6 +45,8 @@
 #include "middleware/periph/sdcard_service.h"
 #include "middleware/camera/punch_service.h"
 #include "middleware/camera/capture_service.h"      /* ★ S9 §3.5：/api/media/capture */
+#include "middleware/camera/jpeg_util.h"            /* ★ §76：截图 JPEG 软编 */
+#include "middleware/net/screen_shot.h"             /* ★ §76：RGB framebuffer 直读 */
 #include "middleware/media/avi_mjpeg_demuxer.h"
 #include "middleware/media/wallpaper_service.h"     /* ★ §75 补充 2：壁纸管理 */
 #include "middleware/net/web_server.h"
@@ -1340,6 +1342,191 @@ static esp_err_t handler_api_result(httpd_req_t *req)
 }
 
 /* ---------------------------------------------------------------------------
+ *  ★ §76：设备端真实界面抓取
+ *
+ *  数据源不是 lv_snapshot 的"重新渲染"，而是 RGB 面板的 framebuffer：
+ *  LVGL 在 DIRECT+AVOID_TEAR 下把两块面板 FB 直接当 draw buffer，
+ *  所以读出来的就是屏幕正在扫描输出的像素（含视频/相机画布）。
+ *  抓图与网络发送严格分离：持 LVGL 锁只做 memcpy，发 chunk 时已解锁。
+ * ------------------------------------------------------------------------- */
+#define SHOT_CHUNK_BYTES   (64 * 1024)
+#define SHOT_BMP_BLOCK_ROWS 16
+/* httpd 是单任务：同一时刻只允许一个抓图/抓帧请求占用它。
+ * 浏览器下载失败后会自动重试，若不加闸门，重试请求会排满 socket，
+ * 把整个 Web UI 一起堵死（现场表现为页面和下载全部“网络连接失败”）。 */
+static volatile bool s_frame_busy;
+static volatile bool s_shot_busy;
+
+/** 读取整型 query 参数（缺省/非法时用 def） */
+static int shot_query_int(httpd_req_t *req, const char *key, int def)
+{
+    char s[16];
+    if (query_get(req, key, s, sizeof(s)) != ESP_OK) {
+        return def;
+    }
+    return atoi(s);
+}
+
+/** GET /api/display/frame?scale=1|2
+ *  8 字节头：'R','G','1','6' + u16 LE 宽 + u16 LE 高，随后是 RGB565 小端像素。 */
+static esp_err_t handler_display_frame(httpd_req_t *req)
+{
+    log_req(req, "display/frame");
+    if (s_frame_busy) {
+        return send_json(req, "{\"error\":\"busy\"}");
+    }
+    s_frame_busy = true;
+    int64_t t0 = esp_timer_get_time();
+    const int scale = (shot_query_int(req, "scale", 1) == 2) ? 2 : 1;
+
+    uint8_t *rgb = NULL;
+    int w = 0, h = 0;
+    esp_err_t e = screen_shot_take(&rgb, &w, &h, scale);
+    if (e != ESP_OK) {
+        s_frame_busy = false;
+        ESP_LOGW(TAG, "display/frame capture failed: %s", esp_err_to_name(e));
+        return send_json(req, e == ESP_ERR_NO_MEM ? "{\"error\":\"no_mem\"}"
+                                                  : "{\"error\":\"capture\"}");
+    }
+
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+
+    const uint8_t hdr[8] = { 'R', 'G', '1', '6',
+                             (uint8_t)w, (uint8_t)(w >> 8),
+                             (uint8_t)h, (uint8_t)(h >> 8) };
+    const size_t bytes = (size_t)w * (size_t)h * 2;
+    esp_err_t ret = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
+    for (size_t off = 0; ret == ESP_OK && off < bytes; off += SHOT_CHUNK_BYTES) {
+        size_t n = bytes - off;
+        if (n > SHOT_CHUNK_BYTES) {
+            n = SHOT_CHUNK_BYTES;
+        }
+        ret = httpd_resp_send_chunk(req, (const char *)rgb + off, (ssize_t)n);
+    }
+    if (ret == ESP_OK) {
+        httpd_resp_send_chunk(req, NULL, 0);
+    }
+    screen_shot_free(rgb);
+
+    ESP_LOGI(TAG, "display/frame %dx%d %u B in %u ms (%s)", w, h,
+             (unsigned)bytes, (unsigned)((esp_timer_get_time() - t0) / 1000),
+             esp_err_to_name(ret));
+    s_frame_busy = false;
+    return ret;
+}
+
+/** GET /api/display/shot?fmt=bmp|jpg&scale=1|2&q=80（浏览器可直接 <img>/下载） */
+static esp_err_t handler_display_shot(httpd_req_t *req)
+{
+    log_req(req, "display/shot");
+    int64_t t0 = esp_timer_get_time();
+
+    char fmt[8] = "bmp";
+    query_get(req, "fmt", fmt, sizeof(fmt));
+    const bool as_jpg = (strcasecmp(fmt, "jpg") == 0 || strcasecmp(fmt, "jpeg") == 0);
+    if (!as_jpg && strcasecmp(fmt, "bmp") != 0) {
+        return send_json(req, "{\"error\":\"bad_fmt\"}");
+    }
+    const int scale = (shot_query_int(req, "scale", 1) == 2) ? 2 : 1;
+    int quality = shot_query_int(req, "q", 80);
+    if (quality < 1) quality = 1;
+    if (quality > 100) quality = 100;
+
+    if (s_shot_busy) {
+        return send_json(req, "{\"error\":\"busy\"}");
+    }
+    s_shot_busy = true;
+
+    uint8_t *rgb = NULL;
+    int w = 0, h = 0;
+    esp_err_t e = screen_shot_take(&rgb, &w, &h, scale);
+    if (e != ESP_OK) {
+        s_shot_busy = false;
+        ESP_LOGW(TAG, "display/shot capture failed: %s", esp_err_to_name(e));
+        return send_json(req, e == ESP_ERR_NO_MEM ? "{\"error\":\"no_mem\"}"
+                                                  : "{\"error\":\"capture\"}");
+    }
+
+    esp_err_t ret = ESP_OK;
+
+    if (as_jpg) {
+        uint8_t *jpg = heap_caps_malloc(SCREEN_SHOT_JPEG_MAX,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (jpg == NULL) {
+            screen_shot_free(rgb);
+            s_shot_busy = false;
+            return send_json(req, "{\"error\":\"no_mem\"}");
+        }
+        size_t len = 0;
+        e = jpeg_util_encode_rgb565_le(rgb, w, h, quality, jpg,
+                                       SCREEN_SHOT_JPEG_MAX, &len);
+        screen_shot_free(rgb);
+        if (e != ESP_OK) {
+            heap_caps_free(jpg);
+            s_shot_busy = false;
+            return send_json(req, "{\"error\":\"encode\"}");
+        }
+        httpd_resp_set_type(req, "image/jpeg");
+        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"screen.jpg\"");
+        httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+        ret = httpd_resp_send(req, (const char *)jpg, (ssize_t)len);
+        ESP_LOGI(TAG, "display/shot jpg %dx%d q=%d %u B in %u ms (%s)", w, h,
+                 quality, (unsigned)len,
+                 (unsigned)((esp_timer_get_time() - t0) / 1000),
+                 esp_err_to_name(ret));
+        heap_caps_free(jpg);
+        s_shot_busy = false;
+        return ret;
+    }
+
+    /* BMP：头 + 每 16 行一块转换后发送 —— 不再为 1.15 MB 的 24bpp 整图
+     * 额外申请一次大缓冲（PSRAM 要留给检测模型）。 */
+    const size_t stride = screen_shot_bmp_stride(w);
+    uint8_t *blk = heap_caps_malloc(stride * SHOT_BMP_BLOCK_ROWS,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (blk == NULL) {
+        screen_shot_free(rgb);
+        s_shot_busy = false;
+        return send_json(req, "{\"error\":\"no_mem\"}");
+    }
+
+    uint8_t hdr[SCREEN_SHOT_BMP_HDR];
+    screen_shot_bmp_header(hdr, w, h);
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"screen.bmp\"");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    ret = httpd_resp_send_chunk(req, (const char *)hdr, sizeof(hdr));
+
+    int rows = 0;
+    for (int y = 0; y < h && ret == ESP_OK; y += SHOT_BMP_BLOCK_ROWS) {
+        int n = h - y;
+        if (n > SHOT_BMP_BLOCK_ROWS) {
+            n = SHOT_BMP_BLOCK_ROWS;
+        }
+        for (int r = 0; r < n; r++) {
+            uint8_t *row = blk + (size_t)r * stride;
+            screen_shot_bmp_row(rgb, w, y + r, row);
+            if (stride > (size_t)w * 3) {
+                memset(row + (size_t)w * 3, 0, stride - (size_t)w * 3);
+            }
+        }
+        ret = httpd_resp_send_chunk(req, (const char *)blk, (ssize_t)((size_t)n * stride));
+        rows += n;
+    }
+    if (ret == ESP_OK) {
+        httpd_resp_send_chunk(req, NULL, 0);
+    }
+    heap_caps_free(blk);
+    screen_shot_free(rgb);
+
+    ESP_LOGI(TAG, "display/shot bmp %dx%d rows=%d in %u ms (%s)", w, h, rows,
+             (unsigned)((esp_timer_get_time() - t0) / 1000), esp_err_to_name(ret));
+    s_shot_busy = false;
+    return ret;
+}
+
+/* ---------------------------------------------------------------------------
  *  启动
  * ------------------------------------------------------------------------- */
 static const httpd_uri_t s_uris[] = {
@@ -1364,6 +1551,9 @@ static const httpd_uri_t s_uris[] = {
     { .uri = "/api/system/reboot",   .method = HTTP_POST,   .handler = handler_api_reboot,        .user_ctx = NULL },
     { .uri = "/api/system/status",   .method = HTTP_GET,    .handler = handler_api_status,        .user_ctx = NULL },
     { .uri = "/api/action/result",   .method = HTTP_GET,    .handler = handler_api_result,        .user_ctx = NULL },
+    /* ---- §76 设备端真实界面抓取（RGB framebuffer）---- */
+    { .uri = "/api/display/frame",   .method = HTTP_GET,    .handler = handler_display_frame,     .user_ctx = NULL },
+    { .uri = "/api/display/shot",    .method = HTTP_GET,    .handler = handler_display_shot,      .user_ctx = NULL },
 };
 
 esp_err_t web_server_init(void)
@@ -1388,9 +1578,10 @@ esp_err_t web_server_init(void)
 
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 8192;                  /* 流式 handler + snprintf 需要 */
-    cfg.max_uri_handlers = 24;              /* 8 只读 + 4 管理 + 8 动作（S9 §3.5） */
+    cfg.max_uri_handlers = 26;              /* 8 只读 + 4 管理 + 8 动作 + 2 屏幕抓取（§76） */
     cfg.recv_wait_timeout = 10;
-    cfg.send_wait_timeout = 30;
+    cfg.send_wait_timeout = 10;             /* 客户端停读时尽快释放单任务 httpd */
+    cfg.keep_alive_enable = false;          /* 每个请求独立连接，避免半死 keep-alive 卡住服务 */
     cfg.lru_purge_enable = true;            /* fd 紧张时挤掉最久未用的连接 */
 
     httpd_handle_t server = NULL;

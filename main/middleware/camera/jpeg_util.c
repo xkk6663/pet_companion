@@ -39,6 +39,7 @@
 static SemaphoreHandle_t s_lock;
 static jpeg_enc_handle_t s_enc;
 static int               s_w, s_h, s_q;
+static jpeg_pixel_format_t s_fmt;
 
 /* 惰性建锁：不能在静态初始化里建（调度器未必就绪），也不能用 ESP_ERROR_CHECK
  * （那是"资源紧张就重启"的写法，本工程中间层一律拒绝）。 */
@@ -61,6 +62,7 @@ static void enc_close_locked(void)
         s_enc = NULL;
     }
     s_w = s_h = s_q = 0;
+    s_fmt = 0;
 }
 
 void jpeg_util_deinit(void)
@@ -72,21 +74,24 @@ void jpeg_util_deinit(void)
     ESP_LOGI(TAG, "encoder released");
 }
 
-esp_err_t jpeg_util_encode_rgb888(const uint8_t *rgb, int w, int h, int quality,
-                                  uint8_t *out, size_t out_cap, size_t *out_len)
+/* 两种输入格式共用同一个常驻编码器；句柄缓存键把 src_type 也算进去，
+ * 否则同尺寸不同像素格式会静默复用错误的配置。 */
+static esp_err_t encode_common(const uint8_t *src, int w, int h, int quality,
+                               jpeg_pixel_format_t fmt, int bytes_per_px,
+                               uint8_t *out, size_t out_cap, size_t *out_len)
 {
     if (out_len) *out_len = 0;
 
-    if (!rgb || !out || w <= 0 || h <= 0 || quality < 1 || quality > 100) {
-        ESP_LOGE(TAG, "bad args: rgb=%p out=%p w=%d h=%d q=%d",
-                 (const void *)rgb, (void *)out, w, h, quality);
+    if (!src || !out || w <= 0 || h <= 0 || quality < 1 || quality > 100) {
+        ESP_LOGE(TAG, "bad args: src=%p out=%p w=%d h=%d q=%d",
+                 (const void *)src, (void *)out, w, h, quality);
         return ESP_ERR_INVALID_ARG;
     }
     /* ★ 16 字节对齐是 esp_jpeg 的硬要求（见 .h）。先拦下来说清楚，
      *   而不是让它在编码器内部按"数据损坏"报一个看不懂的错。 */
-    if (((uintptr_t)rgb & 0xF) != 0) {
+    if (((uintptr_t)src & 0xF) != 0) {
         ESP_LOGE(TAG, "input buffer not 16-byte aligned (%p) - use heap_caps_aligned_alloc",
-                 (const void *)rgb);
+                 (const void *)src);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -96,14 +101,14 @@ esp_err_t jpeg_util_encode_rgb888(const uint8_t *rgb, int w, int h, int quality,
     esp_err_t ret = ESP_OK;
     int64_t   t0  = esp_timer_get_time();
 
-    /* ---- 句柄：几何/质量不变则复用 ---- */
-    if (s_enc == NULL || s_w != w || s_h != h || s_q != quality) {
+    /* ---- 句柄：几何/质量/像素格式不变则复用 ---- */
+    if (s_enc == NULL || s_w != w || s_h != h || s_q != quality || s_fmt != fmt) {
         enc_close_locked();
 
         jpeg_enc_config_t cfg = DEFAULT_JPEG_ENC_CONFIG();
         cfg.width     = w;
         cfg.height    = h;
-        cfg.src_type  = JPEG_PIXEL_FORMAT_RGB888;
+        cfg.src_type  = fmt;
         /* ★ 4:2:0 抽样：与传感器硬件档一致，体积最小。
          *   本工程用途是"存证/底片"，肉眼能认出人即可，不需要 4:4:4。 */
         cfg.subsampling = JPEG_SUBSAMPLE_420;
@@ -120,14 +125,14 @@ esp_err_t jpeg_util_encode_rgb888(const uint8_t *rgb, int w, int h, int quality,
             ret = ESP_FAIL;
             goto out;
         }
-        s_w = w; s_h = h; s_q = quality;
-        ESP_LOGI(TAG, "encoder opened: %dx%d q=%d", w, h, quality);
+        s_w = w; s_h = h; s_q = quality; s_fmt = fmt;
+        ESP_LOGI(TAG, "encoder opened: %dx%d q=%d fmt=%d", w, h, quality, (int)fmt);
     }
 
     {
-        int in_bytes = w * h * 3;
+        int in_bytes = w * h * bytes_per_px;
         int out_size = 0;
-        jpeg_error_t e = jpeg_enc_process(s_enc, rgb, in_bytes, out, (int)out_cap, &out_size);
+        jpeg_error_t e = jpeg_enc_process(s_enc, src, in_bytes, out, (int)out_cap, &out_size);
         if (e != JPEG_ERR_OK) {
             /* ★ 唯一需要区分的一条：缓冲不够。其余都是编码器内部错误。
              *   （`out_cap` 是调用方给的，写不下一律如实报错，绝不静默截断
@@ -155,4 +160,18 @@ esp_err_t jpeg_util_encode_rgb888(const uint8_t *rgb, int w, int h, int quality,
 out:
     xSemaphoreGive(s_lock);
     return ret;
+}
+
+esp_err_t jpeg_util_encode_rgb888(const uint8_t *rgb, int w, int h, int quality,
+                                  uint8_t *out, size_t out_cap, size_t *out_len)
+{
+    return encode_common(rgb, w, h, quality, JPEG_PIXEL_FORMAT_RGB888, 3,
+                         out, out_cap, out_len);
+}
+
+esp_err_t jpeg_util_encode_rgb565_le(const uint8_t *rgb565, int w, int h, int quality,
+                                     uint8_t *out, size_t out_cap, size_t *out_len)
+{
+    return encode_common(rgb565, w, h, quality, JPEG_PIXEL_FORMAT_RGB565_LE, 2,
+                         out, out_cap, out_len);
 }

@@ -87,6 +87,7 @@
   <button data-p="log">打卡记录</button>
   <button data-p="media">媒体浏览</button>
   <button data-p="manage">壁纸/音乐</button>
+  <button data-p="screen">屏幕</button>
 </nav>
 <main>
   <div id="page-live" class="page on">
@@ -137,6 +138,25 @@
       <div id="mu-list"></div>
     </div>
   </div>
+  <div id="page-screen" class="page">
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px">
+        直读 RGB 面板 framebuffer（800×480）· 连续默认高清；取消勾选则 2×2 抽样，速度更快
+      </div>
+      <canvas id="scr-canvas" width="800" height="480"
+              style="width:100%;max-width:800px;margin:0 auto;display:block;background:#000;border-radius:8px;image-rendering:-webkit-optimize-contrast;image-rendering:pixelated;image-rendering:crisp-edges"></canvas>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+        <button onclick="scrShot(scrScale())">刷新一帧</button>
+        <button onclick="scrToggleLive()" id="scr-live-btn">连续</button>
+        <button onclick="scrDownload('bmp')">下载 BMP</button>
+        <button onclick="scrDownload('jpg')">下载 JPG</button>
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="scr-hi" checked> 高清 800×480
+        </label>
+      </div>
+      <div class="muted" id="scr-stat" style="margin-top:8px">-</div>
+    </div>
+  </div>
 </main>
 
 <div id="lightbox" onclick="lbClose()">
@@ -178,8 +198,98 @@ document.querySelectorAll('nav button').forEach(b => {
     if (b.dataset.p === 'log'  && !logLoaded) loadLog();
     if (b.dataset.p === 'media') loadDir(curDir);
     if (b.dataset.p === 'manage') loadManage();
+    if (b.dataset.p === 'screen') scrShot(scrScale());
+    else if (scrTimer) scrToggleLive();       /* 离开屏幕页就停连续抓图 */
   };
 });
+
+/* ---------- 设备屏幕镜像（直读 RGB framebuffer，协议见 web_server.c） ---------- */
+let scrTimer = null, scrBusy = false;
+function scrScale() {
+  const el = document.getElementById('scr-hi');
+  return (el && el.checked) ? 1 : 2;
+}
+let scrDownloading = false;
+async function scrDownload(fmt) {
+  if (scrDownloading) return;
+  if (scrTimer) scrToggleLive();          /* 单任务 httpd：先停连续，避免下载排在帧后面 */
+  scrDownloading = true;
+  const stat = $('#scr-stat');
+  const ctl = new AbortController();
+  const timeout = setTimeout(() => ctl.abort(), 20000);
+  if (stat) stat.textContent = '下载中…';
+  try {
+    const url = fmt === 'bmp'
+      ? '/api/display/shot?fmt=bmp'
+      : '/api/display/shot?fmt=jpg&q=90';
+    const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fmt === 'bmp' ? 'screen.bmp' : 'screen.jpg';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    if (stat) stat.textContent = '已下载 ' + (blob.size / 1024).toFixed(0) + ' KB';
+  } catch (e) {
+    if (stat) stat.textContent = '下载失败: ' + (e.name === 'AbortError' ? '超时' : e.message);
+  } finally {
+    clearTimeout(timeout);
+    scrDownloading = false;
+  }
+}
+async function scrShot(scale) {
+  if (scrBusy) return;
+  scrBusy = true;
+  const t0 = performance.now();
+  try {
+    const r = await fetch('/api/display/frame?scale=' + (scale || 1), {cache:'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('octet-stream')) throw new Error(await r.text());
+    const buf = await r.arrayBuffer();
+    const dv = new DataView(buf);
+    if (buf.byteLength < 8 || dv.getUint32(0, false) !== 0x52473136) {
+      throw new Error('bad frame');
+    }
+    const w = dv.getUint16(4, true), h = dv.getUint16(6, true);
+    if (buf.byteLength !== 8 + w * h * 2) throw new Error('truncated');
+    const cv = $('#scr-canvas');
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    const d = img.data;
+    let p = 8, o = 0;
+    for (let i = 0; i < w * h; i++) {
+      const v = dv.getUint16(p, true); p += 2;      /* RGB565 小端 */
+      d[o++] = ((v >> 11) & 31) << 3;
+      d[o++] = ((v >> 5) & 63) << 2;
+      d[o++] = (v & 31) << 3;
+      d[o++] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    $('#scr-stat').textContent = `${w}×${h} · ${(buf.byteLength / 1024).toFixed(0)} KB · `
+      + `${(performance.now() - t0).toFixed(0)} ms`;
+  } catch (e) {
+    $('#scr-stat').textContent = '抓取失败：' + e.message;
+  }
+  scrBusy = false;
+}
+function scrToggleLive() {
+  if (scrTimer) {
+    clearTimeout(scrTimer); scrTimer = null;
+    $('#scr-live-btn').textContent = '连续';
+    return;
+  }
+  $('#scr-live-btn').textContent = '停止';
+  const tick = async () => {
+    await scrShot(scrScale());
+    if (scrTimer) scrTimer = setTimeout(tick, 300);
+  };
+  scrTimer = setTimeout(tick, 0);
+}
 
 /* ---------- 打卡事件轮询（1s；gen 代际号机制，见 web_server.c） ---------- */
 let gen = -1;
