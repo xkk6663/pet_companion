@@ -50,7 +50,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #include "pet_overlay.h"
@@ -67,8 +67,8 @@ LV_FONT_DECLARE(lv_font_cn_20);
 
 static const char *TAG = "UI_PET";
 
-#define PET_W    (BSP_LCD_H_RES - 24)
-#define PET_H    (BSP_LCD_V_RES - 24)
+#define PET_W    (BOARD_LCD_H_RES - 24)
+#define PET_H    (BOARD_LCD_V_RES - 24)
 #define PET_SLIDE_MS   300
 
 #define PET_EVT_Q_DEPTH 16
@@ -1098,8 +1098,8 @@ void pet_overlay_init(void)
     lv_obj_set_scrollable(top, false);
 
     s_win = lv_obj_create(top);
-    lv_obj_set_size(s_win, BSP_LCD_H_RES, BSP_LCD_V_RES);
-    lv_obj_set_pos(s_win, 0, BSP_LCD_V_RES);
+    lv_obj_set_size(s_win, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
+    lv_obj_set_pos(s_win, 0, BOARD_LCD_V_RES);
     lv_obj_set_scrollable(s_win, false);
     lv_obj_set_style_bg_color(s_win, COL_BG, 0);
     lv_obj_set_style_border_width(s_win, 0, 0);
@@ -1230,7 +1230,7 @@ void pet_overlay_init(void)
 
     /* ---- 键盘层（默认隐藏；覆盖全屏避免和气泡抢触摸）---- */
     s_kb_root = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_kb_root, BSP_LCD_H_RES, BSP_LCD_V_RES);
+    lv_obj_set_size(s_kb_root, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     lv_obj_set_pos(s_kb_root, 0, 0);
     lv_obj_set_style_bg_color(s_kb_root, COL_BG, 0);
     lv_obj_set_style_bg_opa(s_kb_root, LV_OPA_COVER, 0);
@@ -1426,7 +1426,7 @@ void pet_overlay_init(void)
     chat_add(MSG_AI, "嗨，我是大肥鱼。想聊天、点歌、拍照，直接说就行。", false);
 
     ESP_LOGI(TAG, "pet overlay ready (%dx%d, chat %dx%d, chips=%d)",
-             BSP_LCD_H_RES, BSP_LCD_V_RES, CHAT_W, CHAT_H, ai_action_tool_count());
+             BOARD_LCD_H_RES, BOARD_LCD_V_RES, CHAT_W, CHAT_H, ai_action_tool_count());
 }
 
 void pet_overlay_deinit(void)
@@ -1489,7 +1489,7 @@ void pet_overlay_show(void)
 void pet_overlay_hide(void)
 {
     if (s_win) {
-        pet_animate_to(BSP_LCD_V_RES);
+        pet_animate_to(BOARD_LCD_V_RES);
         s_visible = false;
         s_hw_ptt_pending = false;
         s_ptt_pending_touch = false;

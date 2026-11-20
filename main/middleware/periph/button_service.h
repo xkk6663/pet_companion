@@ -60,6 +60,16 @@ typedef enum {
 typedef void (*btn_evt_cb_t)(btn_id_t id, btn_evt_t evt);
 
 /**
+ * @brief SET 键长按（≥ 3 s）回调
+ * @note  在 iot_button 任务上下文执行；**只置标志/发消息**，LVGL 操作请交给
+ *        LVGL 线程（本工程铁律：按键回调不碰 LVGL）。
+ */
+typedef void (*btn_long_press_cb_t)(void);
+
+/** SET 长按判定时长（ms）：屏保开关用，只对 SET 生效，不影响其它键与 SET 单击 */
+#define BTN_SET_LONG_PRESS_MS   3000
+
+/**
  * @brief 音量变化消息（发送到音量事件队列）
  */
 typedef struct {
@@ -75,6 +85,14 @@ void button_service_init(void);
  * @brief 注册按键事件回调（覆盖式，后注册者生效）
  */
 void button_service_set_evt_cb(btn_evt_cb_t cb);
+
+/**
+ * @brief 注册 SET 长按（≥ BTN_SET_LONG_PRESS_MS）回调（覆盖式，可传 NULL 注销）
+ *
+ * 与 button_service_set_evt_cb 的回调**互不替代**：这个是独立通道，
+ * 只在 SET 按住满 3 s 时触发一次（松开不重复），SET 的单击/双击语义不变。
+ */
+void button_service_set_set_long_cb(btn_long_press_cb_t cb);
 
 /**
  * @brief 获取音量事件队列（UI 层 xQueueReceive 用）

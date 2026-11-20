@@ -1,5 +1,10 @@
 idf_component_register(SRCS
                         "app/main.c"
+                        ## ---- L1 平台层（换板/换屏唯一入口；只此一处认识板级包）----
+                        "platform/port_display.c"
+                        "platform/port_storage.c"
+                        "platform/port_time.c"
+                        "platform/port_bus.c"
                         "middleware/audio/audio_service.c"
                         ## ---- 双麦前端（BSS 直通 / GSC 波束成形）----
                         "middleware/audio/mic_frontend.c"
@@ -24,6 +29,7 @@ idf_component_register(SRCS
                         "middleware/ai/ai_speaker.c"
                         "middleware/ai/ai_camera.c"
                         "middleware/ai/ai_device.c"
+                        "middleware/ai/ai_action_endpoints.c"
                         "middleware/ai/ai_punch.c"
                         "middleware/ai/ai_action.c"
                         "middleware/ai/ai_music.c"
@@ -35,6 +41,7 @@ idf_component_register(SRCS
                         "middleware/net/wifi_manager.c"
                         "middleware/net/net_time_service.c"
                         ## ---- §74：网页管理端（APSTA 热点/局域网浏览器管理）----
+                        "middleware/net/web_action.c"
                         "middleware/net/web_server.c"
                         ## ---- §76：设备端真实界面抓取（RGB framebuffer → BMP/JPEG）----
                         "middleware/net/screen_shot.c"
@@ -50,6 +57,7 @@ idf_component_register(SRCS
                         "middleware/mem/static_pool.c"
                         ## ---- S8-1：人脸库（特征索引落盘；不依赖 esp-dl）----
                         "middleware/face_db/face_db.c"
+                        "middleware/camera/punch_watermark.c"
                         "middleware/camera/camera_service.c"
                         "middleware/camera/ov3660_fmt.c"
                         "middleware/camera/capture_service.c"
@@ -71,6 +79,7 @@ idf_component_register(SRCS
                         "ui/ui_manager/page_manager.c"
                         "ui/overlay_manager.c"
                         "ui/ui_common.c"
+                        "ui/punch_watermark_ui.c"
                         "ui/page_splash.c"
                         "ui/page_main.c"
                         "ui/tab_record.c"

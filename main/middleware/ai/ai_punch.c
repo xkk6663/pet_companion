@@ -41,8 +41,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "bsp/esp-bsp.h"
-#include "lvgl.h"
+#include "platform/port_display.h"   /* 只借 LVGL 锁，不再认识 BSP */
 
 #include "esp_mcp_engine.h"
 
@@ -53,10 +52,7 @@
 #include "middleware/camera/face_quality.h"
 #include "middleware/camera/punch_service.h"
 #include "middleware/net/net_time_service.h"
-#include "ui/ui_theme.h"
-#include "ui/ui_binfont.h"
-
-LV_FONT_DECLARE(lv_font_cn_20);   /* CJK 兜底字体（bin 字体未就绪时用，同 overlay_ai） */
+#include "middleware/camera/punch_watermark.h"   /* ★ P2：水印渲染槽（UI 注册实现） */
 
 static const char *TAG = "AI_PUNCH";
 
@@ -101,9 +97,6 @@ static volatile bool s_fb_new;
 static volatile bool s_have;
 static portMUX_TYPE s_fb_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t *s_fle;          /* LE 工作帧（提交给识别引擎） */
-
-/* ---- 水印离屏画布（会话期临时；LVGL 对象，锁内使用） ---- */
-static lv_obj_t *s_wm_canvas;
 
 static int64_t now_us(void)
 {
@@ -183,81 +176,9 @@ static void viewfinder_pump(int64_t *last_pub_us)
     ai_camera_preview_publish_rgb565(le, PUNCH_W, PUNCH_H);
 }
 
-/* ---- 水印（LVGL 线程 = bsp_display_lock 临界区内调用） ---- */
-
-static void wm_canvas_ensure(void)
-{
-    if (s_wm_canvas) {
-        return;
-    }
-    s_wm_canvas = lv_canvas_create(lv_layer_top());
-    lv_obj_set_hidden(s_wm_canvas, true);
-    lv_obj_set_ignore_layout(s_wm_canvas, true);
-    lv_obj_set_pos(s_wm_canvas, -1000, -1000);
-}
-
-static void wm_canvas_teardown(void)
-{
-    if (s_wm_canvas) {
-        lv_obj_delete(s_wm_canvas);
-        s_wm_canvas = NULL;
-    }
-}
-
-/* 复刻 tab_camera::watermark_draw（S8-3）：离屏 canvas + 立即模式。
- * 行高用字体 line_height 动态算（bin 字体 28 / cn_20 ~20，写死必压字）。 */
-static void wm_draw(uint8_t *rgb, int w, int h, const char *name, const char *timestr)
-{
-    if (!rgb || w <= 0 || h <= 0 || !s_wm_canvas) {
-        ESP_LOGE(TAG, "watermark: bad frame or canvas missing (%p %dx%d)", rgb, w, h);
-        return;
-    }
-
-    lv_canvas_set_buffer(s_wm_canvas, rgb, w, h, LV_COLOR_FORMAT_RGB888);
-
-    lv_font_t *cjk = ui_binfont_get();
-    const lv_font_t *nf = cjk ? cjk : &lv_font_cn_20;
-    int lh_name = nf->line_height;
-    int lh_time = UI_FONT->line_height;
-
-    int band_h = lh_name + lh_time + 8;
-    if (band_h > h / 2) {
-        band_h = h / 2;   /* 极端字体下别把整张图糊掉 */
-    }
-    int band_y = h - band_h;
-
-    lv_layer_t layer;
-    lv_canvas_init_layer(s_wm_canvas, &layer);
-
-    /* 半透明黑带：浅色背景上白字可读的前提 */
-    lv_draw_rect_dsc_t rdsc;
-    lv_draw_rect_dsc_init(&rdsc);
-    rdsc.bg_color = lv_color_black();
-    rdsc.bg_opa   = LV_OPA_50;
-    rdsc.radius   = 0;
-    lv_area_t band = { 0, band_y, w - 1, h - 1 };
-    lv_draw_rect(&layer, &rdsc, &band);
-
-    lv_draw_label_dsc_t ldsc;
-    lv_draw_label_dsc_init(&ldsc);
-    ldsc.color = lv_color_white();
-    ldsc.opa   = LV_OPA_COVER;
-
-    if (name && name[0]) {
-        ldsc.font = nf;
-        ldsc.text = name;
-        lv_area_t a = { 6, band_y + 4, w - 7, band_y + 4 + lh_name - 1 };
-        lv_draw_label(&layer, &ldsc, &a);
-    }
-    if (timestr && timestr[0]) {
-        ldsc.font = UI_FONT;
-        ldsc.text = timestr;
-        lv_area_t a = { 6, band_y + 4 + lh_name, w - 7, band_y + 4 + lh_name + lh_time - 1 };
-        lv_draw_label(&layer, &ldsc, &a);
-    }
-
-    lv_canvas_finish_layer(s_wm_canvas, &layer);
-}
+/* 水印实现已整体搬到 ui/punch_watermark_ui.c（★ P2 解耦：业务不再 include LVGL/UI）。
+ * 本文件现在只会调 punch_watermark_apply() / release() / active()，
+ * 由 UI 启动时注册的实现负责画。 */
 
 /* ---- 会话本体（WS 收包任务上下文；out 带回结论） ---- */
 
@@ -402,8 +323,7 @@ static void punch_session(char *out, size_t out_size)
         punch_prep_t prep = PUNCH_PREP_BAD_ARG;
         bool committed = false;
 
-        bsp_display_lock(0);
-        wm_canvas_ensure();
+        disp_lock();
         const uint8_t *src = face_recog_frame(&sw, &sh);
         uint8_t *dst = NULL;
         if (src) {
@@ -414,14 +334,14 @@ static void punch_session(char *out, size_t out_size)
             char ts[24];
             net_time_service_get(&nt);
             net_time_service_format(&nt, ts, sizeof(ts));   /* 未校时是长横线占位，不是 1970 */
-            wm_draw(dst, sw, sh, who, ts);
+            punch_watermark_apply(dst, sw, sh, who, ts);
             committed = (punch_service_commit() == ESP_OK);
             if (!committed) {
                 punch_service_abort();   /* 已 begin 却 commit 失败：回滚占位（冷却不退，见 tab_camera 同注） */
             }
         }
-        wm_canvas_teardown();
-        bsp_display_unlock();
+        punch_watermark_release();
+        disp_unlock();
 
         face_recog_result_consume();   /* 结果消费（begin 已拷帧，不再需要 r/src） */
 
@@ -506,10 +426,10 @@ cleanup:
             ESP_LOGW(TAG, "restore preview failed: %s", esp_err_to_name(re));
         }
     }
-    if (s_wm_canvas) {   /* 理论上到不了（锁内必 teardown）；兜底防泄漏 */
-        bsp_display_lock(0);
-        wm_canvas_teardown();
-        bsp_display_unlock();
+    if (punch_watermark_active()) {   /* 理论上到不了（锁内必 release）；兜底防泄漏 */
+        disp_lock();
+        punch_watermark_release();
+        disp_unlock();
     }
     if (s_fb[0]) {
         heap_caps_free(s_fb[0]);

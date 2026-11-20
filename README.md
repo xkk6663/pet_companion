@@ -44,11 +44,12 @@
                    下行 text/emotion/audio/image/action/system/error
 ┌──────────────────────────────┴──────────────────────────────────────────────┐
 │  L5 表达   LVGL 桌宠浮窗 · 6 个 tab（CAM/VIDEO/FILES/MUSIC/REC/SYS）        │
-│  L4 会话   xiaozhi_service：状态机 + codec 租借 + 双播放通道（TTS 抢占）     │
-│  L3 执行   ai_action + 6 个业务模块：15 个 MCP 工具 + 1 个纯本地动作         │
+│  L4 会话   xiaozhi_service：状态机 + codec 租借 + 双播放通道（TTS 抢占）     
+│  L3 执行   ai_action + 6 个业务模块：15 个 MCP 工具 + 1 个纯本地动作         
 │  L2 解码   event_bus：7 种下行帧分发（收包线程只入队，绝不阻塞）            │
-│  L1 传输   ws_client：单连接 + 1s→30s 指数退避 + 按 JSON 括号切帧            │
-│  身体      ESP32-S31 RISC-V @240MHz · 16MB Flash + 8MB PSRAM · 800×480 屏    │
+│  L1 传输   ws_client：单连接 + 1s→30s 指数退避 + 按 JSON 括号切帧            
+│  L0 平台   platform/ 端口层：board_map + port_display/storage/time/bus       
+│  身体      ESP32-S31 RISC-V @240MHz · 16MB Flash + 8MB PSRAM · 800×480 屏    
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -130,7 +131,7 @@
 | ② 解码 | `event_bus.c` | 7 种下行帧分发：text / emotion / audio / image / action / system / error | 收包任务里**只入队不阻塞** |
 | ③ 执行 | `ai_action.c` + 6 模块 | 动作队列 worker（栈 7168 B）：参数模板合并 → 直调或 `tools/call` → 回 `action_result` | 表里没有的动作**当场报错**，不空转一圈 |
 | ④ 会话 | `xiaozhi_service.c` | 会话状态机 + codec 独占租借 + 双播放通道：TTS `pri=2` 抢占、音乐 `pri=1` 让位 | TTS 结束自动续播音乐，用户听不出被切断 |
-| ⑤ 表达 | `ui/` | `pet_overlay` 桌宠浮窗 + 6 个 tab + 全 CJK bin 字体 | **只有 LVGL 线程能碰 LVGL**，其它任务只置 `volatile` 标志 |
+| ⑤ 表达 | `ui/` | `pet_overlay` 桌宠浮窗 + 6 个 tab + 全 CJK bin 字体 | **只有 LVGL 线程能碰 LVGL**，其它任务只置 `volatile` 标志；显示/存储一律走 `platform/port_*`，不许 include `bsp/esp-bsp.h` |
 
 ### 3.3 端侧智能：为什么人脸必须留在本地
 
@@ -150,8 +151,9 @@
 | 蓝牙外放 | A2DP Source（SBC），连上音响后音乐改由蓝牙出声，可后台继续；controller **懒上电** |
 | 录像 / 录音 | AVI 封装、ES8389 录音，全部落 SD |
 | 文件管理 | FILES 页浏览 / 删除 / 播放；点 `.mp3` 自动切 MUSIC 起播 |
-| 动态壁纸 | 本地壁纸池定时轮换，断电记忆 |
-| 网页管理端 | Wi-Fi APSTA 常开热点 + `:80` 单页（20 个 API），手机直连改配置 |
+| 动态壁纸 | 本地壁纸池定时轮换，断电记忆；**屏保模式**（闲时压暗 + 轻点唤醒 + 上滑退出）叠一层 800×480 粒子特效，canvas 内存 1.15 MB PSRAM，幂等预分配不重复申请 |
+| 网页管理端 | Wi-Fi APSTA 常开热点 + `:80` 单页，**25 个 API**（19 条静态路由 + 6 条运行时注册），手机直连改配置 / 看内存状态 / 抓屏幕 / 传素材 |
+| 开机即用 | 上电直进主界面（屏保待机）；CAM 页建页后 100 ms 自动起预览，不用先点 START |
 
 <p>
   <img src="docs/hardware/tex_screen.jpg" width="52%" alt="屏幕特写：壁纸 + FPS/CPU HUD">
@@ -175,6 +177,29 @@
 | `storage` | `0x7E0000` | `0x820000`（8.12 MB） | littlefs：模型 / 字体 / 图标 / 素材 |
 
 > 单 app 槽 ⇒ **OTA 实质失效**，回退手段就是 USB 全量烧录。改分区表后必须重烧 `storage.bin`。
+
+### 3.6 工程结构：L0~L4 五层与分层护栏
+
+`main/` 不是"按功能分的一排文件夹"，依赖是有方向的：**只许向内，不许反向**。
+
+| 层 | 目录 | 允许依赖 | 现状 |
+|---|---|---|---|
+| L0 平台 | `platform/` | ESP-IDF / BSP / 驱动 | 唯一碰 `bsp/esp-bsp.h` 的地方：`board_map.h` 收屏几何与引脚，`port_display / port_storage / port_time / port_bus` 只做转发 |
+| L1 驱动 | `periph/ · camera/ · audio/ · media/ · net/ · bluetooth/` | L0 | 相机起停、按键、SD 卡、codec 这些"直接拨硬件"的部分 |
+| L2 服务 | 同目录里的 `*_service` | L0~L1 | 持有句柄，对外只暴露语义 API（是谁在调用一概不问） |
+| L3 业务 | `ai/` | L0~L2 | 端云链路 + 6 个工具模块；`net/web_server` 不再直调业务，改走 `web_action` 注册表 |
+| L4 表达 | `ui/` | 全栈（只读） | 唯一调用 LVGL 的层；BSP 依赖已清零（15 个文件 → 0） |
+
+护栏脚本按"谁 include 谁"判层，6 条规则：**G1** 反向依赖、**G2** UI 直接 include BSP / `esp_lcd_*` / `driver/gpio.h`、**G3** 公共头暴露板级硬件类型、**G4** 中间层 include `lvgl.h`、**G5** 公共头里的 `extern` 可变全局、**G6** 模块环。
+
+```powershell
+python tools/layering/layer_guard.py                                        # 盘点：27 处存量全部列出
+python tools/layering/layer_guard.py --baseline tools/layering/layering_baseline.json  # 只报新增（CI 用）
+```
+
+> 2026-11-20 解耦之前实测 **55 处跨层违规**（52 high / 3 medium）。本轮把 UI 的 15 处 BSP 依赖、`web_server` 的 5 处业务直调、打卡水印的 `lv_canvas` 上屏全部切开，
+> 降到 **27 处存量**并登记成基线，**新增 0**，CI 已挂这条 step。剩下的按设备类抽驱动（合并 `drv_jpeg` 5→1、`drv_http` 7→1）再收口。
+> 单片可回滚的例外写法：`// layer-guard:ignore <理由>`。
 
 ---
 
@@ -380,6 +405,12 @@ idf.py -p COM9 flash          # 全量烧录（含分区表 / storage）
 idf.py -p COM9 storage-flash  # 只重烧素材镜像（改 littlefs_content/ 后）
 ```
 
+提交前跑一次分层护栏（新增跨层 include 会直接失败）：
+
+```powershell
+python tools/layering/layer_guard.py --baseline tools/layering/layering_baseline.json
+```
+
 **本地密钥**（绝不入库，`tools/idf_env.local.ps1` 已被 `.gitignore` 忽略，构建时由
 `main/CMakeLists.txt` 读环境变量注入宏）：
 
@@ -410,19 +441,20 @@ cd tools/music_proxy && docker compose up -d music-proxy
 
 ```
 main/
-├── app/main.c                开机初始化编排（服务启动顺序 = 依赖顺序）
+├── app/main.c                开机初始化编排（S1~S6 六个 stage，顺序 = 依赖顺序）
+├── platform/                 L0 端口层：board_map.h（屏几何/引脚）+ port_display / port_storage / port_time / port_bus
 ├── middleware/
-│   ├── ai/                   端云链路：ws_client / event_bus / ai_action
+│   ├── ai/                   端云链路：ws_client / event_bus / ai_action / ai_action_endpoints
 │   │                         + 6 个工具模块 + 点歌 / 曲库 / 云媒体
-│   ├── audio/                audio_service · 本地录音 · 音乐播放 · 歌词
+│   ├── audio/                audio_service · 本地录音 · 音乐播放 · 歌词 · 麦克风前端/闸门/监测
 │   ├── bluetooth/            A2DP Source：bt_audio_service · bt_push_service
-│   ├── camera/               相机 / 拍照 / 人脸检测识别 / 取景器 / JPEG / 打卡
+│   ├── camera/               相机 / 拍照 / 人脸检测识别 / 取景器 / JPEG / 打卡 / 打卡水印
 │   ├── face_db/              人脸特征库（SD 持久化 + CRC）
 │   ├── media/                AVI 封装解封装 · 文件管理 · 录像 · 壁纸
 │   ├── mem/                  编译期静态内部内存池（关键短任务栈）
-│   ├── net/                  Wi-Fi / SNTP / 网页管理端（:80）
-│   └── periph/               按键 / LED / SD / 文件系统 / 安全重启
-├── ui/                       LVGL：splash · 6 个 tab · 浮层 · bin 字体
+│   ├── net/                  Wi-Fi / SNTP / 网页管理端（web_server + web_action 注册表）
+│   └── periph/               按键 / LED / SD / 文件系统 / 安全重启 / flash 占用闸 / 开机守护
+├── ui/                       LVGL：splash · 6 个 tab · 浮层 · bin 字体 · 打卡水印上屏
 ├── 3rd/ringbuf/              环形缓冲
 └── web/index.html            管理端单页（编译期 EMBED_FILES 内嵌）
 
@@ -432,13 +464,15 @@ components/                   esp_bt_audio（A2DP Source + gmf io_bt）
 littlefs_content/             烧进 storage 的模型与素材（不进固件）
 docs/                         工程规范 / 开发文档 / 项目规划 / 汇报 / 硬件图
 tools/diag/                   云端网关 ws_gateway.py + 部署 / 联调脚本
+tools/layering/               分层护栏 layer_guard.py + 存量基线（CI 直接调用）
 tools/music_proxy/            点歌音源代理（Docker）
 ```
 
 | 规模 | 数值 |
 |---|---|
-| 设备端代码 | **61,953 行 / 137 文件**（含约 2 万行生成字模；业务集中在 `middleware/` + `ui/`） |
+| 设备端代码 | **61,375 行 / 171 个 `.c`·`.h`**（业务集中在 `middleware/` + `ui/`；约 2 万行生成字模是 `littlefs_content/` 里的 bin，不在源码里） |
 | 云端代码 | 1,708 行 Python（网关 + 音源代理） |
+| 分层护栏 | 6 条规则（G1~G6），存量 27 条已登记基线，新增违规 CI 直接失败 |
 
 ---
 
@@ -452,6 +486,9 @@ tools/music_proxy/            点歌音源代理（Docker）
 | 固定尺寸、必须内部 RAM 的短任务栈走**静态池** | `main/middleware/mem/static_pool.h`：编译期划好 12 KB `.bss`，**只增不减**；静态 TCB 不能自删后立刻复用 |
 | WS 收包任务里禁止任何阻塞 IO | 阻塞一次就是成片丢包（心跳正常但响应时好时坏） |
 | 只有 LVGL 线程能碰 LVGL | 其它任务只置 `volatile` 标志，由 `lv_timer` 刷新 |
+| 层间依赖只能向内（L0→L4） | 反向依赖 = 改一处崩一片；UI / 业务不许 include `bsp/esp-bsp.h`，屏几何与引脚走 `main/platform/board_map.h`（护栏 G2 会报） |
+| 注册表 / 槽表一律固定容量静态数组 | `web_action`（8 槽）、`flash_guard`（4 槽）都是启动前注册，运行期零 malloc、零加锁；满了就是设计上限，不做动态扩容 |
+| 初始化顺序 S1~S6 冻结，不许重排 | 内存峰值对顺序极敏感（先腾地再加载），重排一次就可能 panic；顺序表在 `main/app/main.c` 顶部 |
 | `lv_event_get_user_data(e)` ≠ `lv_obj_get_user_data(obj)` | 两个存储，混用会静默失效（行为不对但日志全对） |
 | 云端下发的图片必须归一化 | 设备 JPEG 解码器只吃 baseline、≤1M 像素 |
 | 64 位值打印用 `%llu` / `%lld` | `%zu` 只配 `size_t`，用错 varargs 槽错位 |
@@ -469,6 +506,7 @@ tools/music_proxy/            点歌音源代理（Docker）
 | `tools/diag/verify_pet_loop.py` | 端到端验证：云端 push → WS → 设备日志 |
 | `tools/diag/ws_gateway.py` | 云端网关（FastAPI），唯一入口 / 能力中继 / 媒体归一化 |
 | `tools/diag/deploy_gateway.sh` | 网关服务器侧一键部署 |
+| `tools/layering/layer_guard.py` | 分层护栏：G1~G6 六条规则，`--baseline` 只报新增，`--update-baseline <path>` 刷新基线 |
 | `tools/music_proxy/` | 点歌音源代理（Docker） |
 
 **排障口诀**：先看 `[GW]` 日志定位"云端没发 / 设备没收到"，再看设备 `EVT:` 日志定位
@@ -478,6 +516,8 @@ tools/music_proxy/            点歌音源代理（Docker）
 **文档索引**
 
 - [架构分析](docs/开发文档/架构分析.md) —— 端云分层、回合时序、caps 协议、媒体协同
+- [工程分层架构](docs/工程规范/01_工程分层架构.md) —— L0~L4 五层模型、六条护栏规则、允许的例外
+- [分层解耦评估与优化方案（2026-11-20）](docs/项目规划/分层解耦评估与优化方案_2026-11-20.md) —— 审计结论、P0~P4 实施记录、上机崩溃复盘
 - [云端网关开发文档](docs/开发文档/S9_云端网关_开发文档.md) —— 接口契约、AstrBot 对接硬约束、插件开发
 - [通信接口规范 ICD](docs/开发文档/通信接口规范_ICD.md) —— 帧格式与字段级定义
 - [S10 陪伴体三层扩展](docs/开发文档/S10_陪伴体三层扩展_闸门_记忆与MCP资源.md) —— 闸门（VAD 事件切片）、记忆（append-only 事件流）与 MCP resources：P0/P3/P5/P6 已实施，P1/P2/P4 默认关闭待实机验收（工具见 [tools/memory](tools/memory/README.md)）

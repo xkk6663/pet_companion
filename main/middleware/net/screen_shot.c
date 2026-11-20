@@ -16,8 +16,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
-#include "bsp/esp-bsp.h"
-#include "esp_lcd_panel_rgb.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #define TAG "SCREEN_SHOT"
@@ -60,18 +59,13 @@ esp_err_t screen_shot_take(uint8_t **rgb565, int *w, int *h, int scale)
     }
     *rgb565 = NULL;
 
-    esp_lcd_panel_handle_t panel = bsp_display_get_panel();
-    if (panel == NULL) {
-        ESP_LOGE(TAG, "no RGB panel handle");
-        return ESP_ERR_INVALID_STATE;
-    }
-
     /* LVGL direct 模式把这两块就是面板 framebuffer；两块内容经脏区同步保持一致，
-     * 持锁期间不会有一帧只刷新了一半。 */
+     * 持锁期间不会有一帧只刷新了一半。取句柄与取缓冲都收在 platform/port_display，
+     * 本文件不再认识 esp_lcd / BSP 类型。 */
     void *fb[2] = { NULL, NULL };
-    esp_err_t err = esp_lcd_rgb_panel_get_frame_buffer(panel, 2, &fb[0], &fb[1]);
+    esp_err_t err = disp_fb_get(&fb[0], &fb[1]);
     if (err != ESP_OK || fb[0] == NULL) {
-        ESP_LOGE(TAG, "get_frame_buffer failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "disp_fb_get failed: %s", esp_err_to_name(err));
         return (err != ESP_OK) ? err : ESP_ERR_INVALID_STATE;
     }
 
@@ -88,7 +82,7 @@ esp_err_t screen_shot_take(uint8_t **rgb565, int *w, int *h, int scale)
     }
 
     /* 只在这一小段持锁：先把指针处的完整一帧拷走，再去发网络 */
-    if (!bsp_display_lock(1000)) {
+    if (!disp_lock_timeout(1000)) {
         ESP_LOGW(TAG, "lvgl lock timeout");
         heap_caps_free(dst);
         return ESP_ERR_TIMEOUT;
@@ -112,7 +106,7 @@ esp_err_t screen_shot_take(uint8_t **rgb565, int *w, int *h, int scale)
             }
         }
     }
-    bsp_display_unlock();
+    disp_unlock();
 
     *rgb565 = dst;
     *w = dw;

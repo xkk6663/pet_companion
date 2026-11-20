@@ -21,7 +21,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 #include "esp_log.h"
 #include "esp_err.h"
@@ -118,7 +118,7 @@ static void refresh_dev_list(void)
     for (int i = 0; i < s_dev_cnt; i++) {
         const char *nm = s_devs[i].name[0] ? s_devs[i].name : "(unknown)";
         lv_obj_t *row = make_card_row(s_dev_list, "", 40);
-        lv_obj_set_width(row, BSP_LCD_H_RES - 60);
+        lv_obj_set_width(row, BOARD_LCD_H_RES - 60);
         lv_obj_set_height(row, 40);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(row, dev_click_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
@@ -236,7 +236,7 @@ static void poll_cb(lv_timer_t *t)
 static lv_obj_t *make_card_row(lv_obj_t *parent, const char *txt, int32_t h)
 {
     lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_set_size(row, BSP_LCD_H_RES - 40, h);
+    lv_obj_set_size(row, BOARD_LCD_H_RES - 40, h);
     lv_obj_set_style_bg_color(row, COL_CARD, 0);
     lv_obj_set_style_border_color(row, COL_BORDER, 0);
     lv_obj_set_style_border_width(row, 1, 0);
@@ -284,7 +284,7 @@ static lv_obj_t *bt_create(lv_obj_t *parent)
 
     /* 搜索 */
     s_scan_btn = lv_button_create(page);
-    lv_obj_set_size(s_scan_btn, BSP_LCD_H_RES - 40, 48);
+    lv_obj_set_size(s_scan_btn, BOARD_LCD_H_RES - 40, 48);
     lv_obj_set_style_bg_color(s_scan_btn, COL_CYAN, 0);
     lv_obj_set_style_radius(s_scan_btn, 12, 0);
     lv_obj_t *scan_lab = lv_label_create(s_scan_btn);
@@ -296,7 +296,7 @@ static lv_obj_t *bt_create(lv_obj_t *parent)
 
     /* 设备列表（BT 回调写入的 s_devs 在这里镜像） */
     s_dev_list = lv_obj_create(page);
-    lv_obj_set_size(s_dev_list, BSP_LCD_H_RES - 40, 190);
+    lv_obj_set_size(s_dev_list, BOARD_LCD_H_RES - 40, 190);
     lv_obj_set_style_bg_color(s_dev_list, COL_BG, 0);
     lv_obj_set_style_border_width(s_dev_list, 0, 0);
     lv_obj_set_style_pad_all(s_dev_list, 0, 0);
@@ -306,7 +306,7 @@ static lv_obj_t *bt_create(lv_obj_t *parent)
 
     /* 断开 */
     s_disc_btn = lv_button_create(page);
-    lv_obj_set_size(s_disc_btn, BSP_LCD_H_RES - 40, 44);
+    lv_obj_set_size(s_disc_btn, BOARD_LCD_H_RES - 40, 44);
     lv_obj_set_style_bg_color(s_disc_btn, COL_CARD, 0);
     lv_obj_set_style_border_color(s_disc_btn, COL_RED, 0);
     lv_obj_set_style_border_width(s_disc_btn, 1, 0);

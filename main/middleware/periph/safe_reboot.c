@@ -21,7 +21,7 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 
-#include "bsp/esp32_s31_korvo_1.h"
+#include "platform/board_map.h"
 
 #include "safe_reboot.h"
 #include "middleware/camera/camera_service.h"
@@ -54,14 +54,14 @@ void safe_reboot_perform(const char *reason)
      *    en_level=0 ⇒ 熄屏拉高）。让屏 IC 在 PCLK 消失前先进 standby，
      *    尽量贴近冷启动时序。（不保证对一切 RGB 屏 IC 有效，但无害。） */
     gpio_config_t io = {
-        .pin_bit_mask = BIT64(BSP_LCD_RGB_DISP),
+        .pin_bit_mask = BIT64(BOARD_LCD_DISP_GPIO),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io);
-    gpio_set_level(BSP_LCD_RGB_DISP, 1);
+    gpio_set_level(BOARD_LCD_DISP_GPIO, 1);
     ESP_LOGW(TAG, "LCD DISP -> standby");
 
     /* ⑤ 给日志/UART 发送一点时间，然后重启（本函数不返回） */

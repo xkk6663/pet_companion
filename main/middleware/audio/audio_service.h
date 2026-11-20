@@ -22,7 +22,6 @@
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "esp_codec_dev.h"
-#include "bsp/esp-bsp.h"
 #include "middleware/periph/fs_service.h"
 
 #ifdef __cplusplus

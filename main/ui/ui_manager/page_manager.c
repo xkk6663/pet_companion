@@ -10,7 +10,7 @@
  */
 
 #include "page_manager.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "esp_log.h"
 
 static const char *TAG = "PAGE_MGR";
@@ -54,7 +54,7 @@ void PageManager_Load(const Page_t *page)
         return;
     }
 
-    bsp_display_lock(0);
+    disp_lock();
 
     /* A page root is created with NULL parent so it is a real LVGL screen. */
     lv_obj_t *new_obj = page->create(NULL);
@@ -72,7 +72,7 @@ void PageManager_Load(const Page_t *page)
 
     ESP_LOGI(TAG, "load %s (depth=%d)", page->name, s_top);
 
-    bsp_display_unlock();
+    disp_unlock();
 }
 
 void PageManager_Back(void)
@@ -82,7 +82,7 @@ void PageManager_Back(void)
         return;
     }
 
-    bsp_display_lock(0);
+    disp_lock();
 
     s_top--;
     const Page_t *cur = s_stack[s_top].page;
@@ -106,7 +106,7 @@ void PageManager_Back(void)
 
     ESP_LOGI(TAG, "back to %s (depth=%d)", s_stack[s_top - 1].page->name, s_top);
 
-    bsp_display_unlock();
+    disp_unlock();
 }
 
 void PageManager_BackToMain(void)
@@ -115,7 +115,7 @@ void PageManager_BackToMain(void)
         return;
     }
 
-    bsp_display_lock(0);
+    disp_lock();
 
     while (s_top > 1) {
         s_top--;
@@ -126,7 +126,7 @@ void PageManager_BackToMain(void)
     }
     lv_scr_load(s_stack[0].obj);
 
-    bsp_display_unlock();
+    disp_unlock();
 }
 
 const Page_t *PageManager_GetCurrent(void)

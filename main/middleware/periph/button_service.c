@@ -6,6 +6,7 @@
 
 #include "button_service.h"
 #include "esp_log.h"
+#include "esp_err.h"
 #include "bsp/esp-bsp.h"
 #include "iot_button.h"
 #include "button_adc.h"
@@ -19,6 +20,8 @@
  * ★ 为什么挂 SET 长按：pet_overlay_key_feed() 只用 SET 的 SINGLE_CLICK，
  *   MODE 的 PRESS_DOWN 被 PTT 占用，VOL± 是音量 —— 长按是唯一空闲手势。 */
 #if CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH
+// layer-guard:ignore 本行只在 CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH=y（调试探针）时参与编译；
+// 当前 sdkconfig 为 n（已确认），默认构建与 audio 层零耦合。
 #include "mic_frontend.h"
 #endif
 
@@ -26,6 +29,7 @@ static const char *TAG = "BTN_SVC";
 
 static button_handle_t s_btns[BTN_ID_NUM];
 static btn_evt_cb_t    s_evt_cb;
+static btn_long_press_cb_t s_set_long_cb;    /* SET 长按 ≥3 s（屏保开关） */
 
 /* Volume state (protected by s_vol_mutex) */
 static int             s_volume = 70;
@@ -101,6 +105,18 @@ static void adjust_volume(int delta)
     ESP_LOGI(TAG, "volume -> %d", s_volume);
     xSemaphoreGive(s_vol_mutex);
     publish_volume();
+}
+
+/* ★ 2026-11-20 屏保手势：SET 按住 ≥ BTN_SET_LONG_PRESS_MS 触发一次。
+ *   只置/调上层回调，不做任何 UI 操作 —— 本函数跑在 iot_button 任务上下文。 */
+static void set_long_press_cb(void *button_handle, void *user_data)
+{
+    (void)button_handle;
+    (void)user_data;
+    ESP_LOGI(TAG, "set: LONG_PRESS (%d ms)", BTN_SET_LONG_PRESS_MS);
+    if (s_set_long_cb) {
+        s_set_long_cb();
+    }
 }
 
 /* P4 探针切换：长按 SET 起效，不走 s_evt_cb（业务层没有长按这个事件） */
@@ -180,6 +196,18 @@ void button_service_init(void)
         iot_button_register_cb(s_btns[i], BUTTON_PRESS_END,     NULL, button_event_cb, (void *)(intptr_t)i);
     }
 
+    /* ★ 2026-11-20：SET 长按改判 3 s，用于开关屏保。
+     *   ★ 顺序不能反：register 时 event_args 传 NULL 会把"当前 long_press_ticks"
+     *     写进 cb_info，所以必须先把 SET 的长按判定改成 3000 ms 再注册。
+     *   ★ 只改 SET 这一颗：MODE/VOL± 的默认 1.5 s 长按语义原样保留。 */
+    esp_err_t lp_err = iot_button_set_param(s_btns[BTN_ID_SET], BUTTON_LONG_PRESS_TIME_MS,
+                                            (void *)(intptr_t)BTN_SET_LONG_PRESS_MS);
+    if (lp_err != ESP_OK) {
+        ESP_LOGW(TAG, "SET long-press time set failed: %s", esp_err_to_name(lp_err));
+    }
+    iot_button_register_cb(s_btns[BTN_ID_SET], BUTTON_LONG_PRESS_START, NULL,
+                           set_long_press_cb, NULL);
+
 #if CONFIG_MIC_FE_PROBE_RUNTIME_SWITCH
     /* P4 探针切换：只挂 SET 的长按（业务侧只用 SET 的单击，长按是空闲手势）。
      * 触发时长由 CONFIG_BUTTON_LONG_PRESS_TIME_MS 决定，当前 1500 ms。 */
@@ -195,6 +223,11 @@ void button_service_init(void)
 void button_service_set_evt_cb(btn_evt_cb_t cb)
 {
     s_evt_cb = cb;
+}
+
+void button_service_set_set_long_cb(btn_long_press_cb_t cb)
+{
+    s_set_long_cb = cb;
 }
 
 QueueHandle_t button_service_get_vol_queue(void)

@@ -9,7 +9,7 @@
  * @brief RGB LED control page: on/off switch + R/G/B color sliders.
  */
 
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #include "page_rgb.h"
@@ -73,7 +73,7 @@ static lv_obj_t *make_channel_row(lv_obj_t *parent, const char *name,
                                   int32_t value)
 {
     lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_set_size(row, BSP_LCD_H_RES - 40, 56);
+    lv_obj_set_size(row, BOARD_LCD_H_RES - 40, 56);
     lv_obj_set_style_bg_color(row, COL_CARD, 0);
     lv_obj_set_style_border_color(row, COL_BORDER, 0);
     lv_obj_set_style_border_width(row, 1, 0);
@@ -90,7 +90,7 @@ static lv_obj_t *make_channel_row(lv_obj_t *parent, const char *name,
     lv_obj_set_style_text_font(lab, UI_FONT, 0);
 
     lv_obj_t *sl = lv_slider_create(row);
-    lv_obj_set_width(sl, BSP_LCD_H_RES - 180);
+    lv_obj_set_width(sl, BOARD_LCD_H_RES - 180);
     lv_slider_set_range(sl, 0, 255);
     lv_slider_set_value(sl, value, false);
     lv_obj_set_style_bg_color(sl, COL_BORDER, 0);
@@ -116,7 +116,7 @@ static lv_obj_t *rgb_create(lv_obj_t *parent)
 
     /* On/off row */
     lv_obj_t *sw_row = lv_obj_create(page);
-    lv_obj_set_size(sw_row, BSP_LCD_H_RES - 40, 56);
+    lv_obj_set_size(sw_row, BOARD_LCD_H_RES - 40, 56);
     lv_obj_set_style_bg_color(sw_row, COL_CARD, 0);
     lv_obj_set_style_border_color(sw_row, COL_BORDER, 0);
     lv_obj_set_style_border_width(sw_row, 1, 0);
@@ -140,7 +140,7 @@ static lv_obj_t *rgb_create(lv_obj_t *parent)
 
     /* Preview swatch + hex label */
     s_preview = lv_obj_create(page);
-    lv_obj_set_size(s_preview, BSP_LCD_H_RES - 40, 64);
+    lv_obj_set_size(s_preview, BOARD_LCD_H_RES - 40, 64);
     lv_obj_set_style_radius(s_preview, 12, 0);
     lv_obj_set_style_border_color(s_preview, COL_BORDER, 0);
     lv_obj_set_style_border_width(s_preview, 1, 0);

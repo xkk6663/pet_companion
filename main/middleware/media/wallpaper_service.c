@@ -25,7 +25,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "nvs.h"
-#include "bsp/esp-bsp.h"
+#include "platform/board_map.h"
 #include "esp_jpeg_dec.h"
 
 #include "wallpaper_service.h"
@@ -51,8 +51,8 @@ static const char *TAG = "WP_SVC";
 #define WP_REQ_Q_DEPTH      2                             /* 手动切换请求队列 */
 
 /* 壁纸必须整屏（用户已拍板统一做 800x480）；非整屏 JPEG 直接拒收，防花屏 */
-#define WP_W    ((uint16_t)BSP_LCD_H_RES)
-#define WP_H    ((uint16_t)BSP_LCD_V_RES)
+#define WP_W    ((uint16_t)BOARD_LCD_H_RES)
+#define WP_H    ((uint16_t)BOARD_LCD_V_RES)
 
 /* ================= 状态 ================= */
 
@@ -150,9 +150,14 @@ static bool decode_file_into(const char *path, uint8_t *out)
     {
         int out_len = 0;
         jpeg_dec_get_outbuf_len(dec, &out_len);
+        /* ★ 2026-11-20 加固：上限必须取**目标缓冲的真实容量**（file_buffer_size），
+         *   而不是假设值 WP_W*WP_H*3。原写法在容量小于假设值时不会拦，
+         *   解码器照样把整帧写进去 —— 那 384,000 B 的越界就是堆被写崩的根因。 */
         size_t need = (size_t)WP_W * WP_H * 3;
-        if ((size_t)out_len > need) {
-            ESP_LOGE(TAG, "decoder wants %d > buffer %u", out_len, (unsigned)need);
+        size_t cap  = file_buffer_size;
+        if (need > cap || (size_t)out_len > cap) {
+            ESP_LOGE(TAG, "buffer too small: need=%u out_len=%d cap=%u (%s)",
+                     (unsigned)need, out_len, (unsigned)cap, path);
             goto cleanup;
         }
     }

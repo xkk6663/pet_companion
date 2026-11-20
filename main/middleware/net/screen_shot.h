@@ -31,13 +31,15 @@
 
 #include "esp_err.h"
 
+#include "platform/board_map.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** 屏幕原始分辨率（与 BSP_LCD_H_RES / BSP_LCD_V_RES 一致） */
-#define SCREEN_SHOT_W          800
-#define SCREEN_SHOT_H          480
+/** 屏幕原始分辨率（唯一来源 = board_map.h，换屏只改那两处） */
+#define SCREEN_SHOT_W          BOARD_LCD_H_RES
+#define SCREEN_SHOT_H          BOARD_LCD_V_RES
 
 /** BMP 文件头长度（BITMAPFILEHEADER + BITMAPINFOHEADER） */
 #define SCREEN_SHOT_BMP_HDR    54

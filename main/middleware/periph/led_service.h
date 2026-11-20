@@ -25,7 +25,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "bsp/esp-bsp.h"
 
 #ifdef __cplusplus
 extern "C" {

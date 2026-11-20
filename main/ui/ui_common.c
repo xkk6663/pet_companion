@@ -9,7 +9,7 @@
  * @brief Reusable widget factory implementation.
  */
 
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "ui_common.h"
 #include "ui_theme.h"
 #include "page_manager.h"
@@ -27,7 +27,7 @@ static void back_btn_cb(lv_event_t *e)
 lv_obj_t *ui_common_page_root(lv_obj_t *parent)
 {
     lv_obj_t *page = lv_obj_create(parent);
-    lv_obj_set_size(page, BSP_LCD_H_RES, BSP_LCD_V_RES);
+    lv_obj_set_size(page, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     lv_obj_set_scrollable(page, false);
     lv_obj_set_style_bg_color(page, COL_BG, 0);
     lv_obj_set_style_border_width(page, 0, 0);
@@ -38,7 +38,7 @@ lv_obj_t *ui_common_page_root(lv_obj_t *parent)
 lv_obj_t *ui_common_title_bar(lv_obj_t *parent, const char *title)
 {
     lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_set_size(bar, BSP_LCD_H_RES - 40, TITLE_BAR_H);
+    lv_obj_set_size(bar, BOARD_LCD_H_RES - 40, TITLE_BAR_H);
     lv_obj_set_style_bg_color(bar, COL_CARD, 0);
     lv_obj_set_style_border_color(bar, COL_BORDER, 0);
     lv_obj_set_style_border_width(bar, 1, 0);
@@ -75,7 +75,7 @@ lv_obj_t *ui_common_setting_row(lv_obj_t *parent, const char *icon,
                                 void *user_data)
 {
     lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_set_size(row, BSP_LCD_H_RES - 40, ROW_H);
+    lv_obj_set_size(row, BOARD_LCD_H_RES - 40, ROW_H);
     lv_obj_set_style_bg_color(row, COL_CARD, 0);
     lv_obj_set_style_border_color(row, COL_BORDER, 0);
     lv_obj_set_style_border_width(row, 1, 0);
@@ -105,7 +105,7 @@ lv_obj_t *ui_common_setting_row(lv_obj_t *parent, const char *icon,
 lv_obj_t *ui_common_placeholder(lv_obj_t *parent, const char *text)
 {
     lv_obj_t *card = lv_obj_create(parent);
-    lv_obj_set_size(card, BSP_LCD_H_RES - 40, 200);
+    lv_obj_set_size(card, BOARD_LCD_H_RES - 40, 200);
     lv_obj_set_style_bg_color(card, COL_CARD, 0);
     lv_obj_set_style_border_color(card, COL_BORDER, 0);
     lv_obj_set_style_border_width(card, 1, 0);

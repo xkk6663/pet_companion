@@ -30,6 +30,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_netif_sntp.h"
 #include "esp_timer.h"
+#include "platform/port_time.h"   /* 可信时间向下沉淀（唯一入口） */
 #include "cJSON.h"
 #include "zlib.h"
 
@@ -536,6 +537,7 @@ static bool sntp_sync_once(void)
              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
     s_time_valid = true;
+    port_time_mark_synced();   /* ★ 向下推送：任何层（含驱动）此后可读可信墙钟 */
     return true;
 }
 

@@ -14,7 +14,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "esp_err.h"
-#include "bsp/esp-bsp.h"
 
 #ifdef __cplusplus
 extern "C" {

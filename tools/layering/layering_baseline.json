@@ -1,0 +1,291 @@
+{
+  "root": "C:\\Users\\xiao1\\Desktop\\esp32\\pet_companion",
+  "summary": {
+    "total": 27,
+    "by_severity": {
+      "high": 24,
+      "medium": 3,
+      "low": 0
+    },
+    "by_rule": {
+      "G1": 18,
+      "G3": 3,
+      "G4": 3,
+      "G5": 2,
+      "G6": 1
+    },
+    "files": 14
+  },
+  "findings": [
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/event_bus.c",
+      "line": 29,
+      "snippet": "#include \"ai_action.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "99452f6fc464af8d"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/event_bus.c",
+      "line": 30,
+      "snippet": "#include \"ai_camera.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "5d8c566aa09199a1"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/event_bus.c",
+      "line": 31,
+      "snippet": "#include \"ai_light.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "1c80a1b78fa72eb8"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/event_bus.c",
+      "line": 32,
+      "snippet": "#include \"ai_punch.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "c85cfa7c6fd614eb"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/xiaozhi_service.c",
+      "line": 53,
+      "snippet": "#include \"ai_light.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "cc64d143547fbe03"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/xiaozhi_service.c",
+      "line": 54,
+      "snippet": "#include \"ai_speaker.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "d4b25ac9d7c613ee"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/xiaozhi_service.c",
+      "line": 55,
+      "snippet": "#include \"ai_camera.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "5855690fd574231a"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/xiaozhi_service.c",
+      "line": 56,
+      "snippet": "#include \"ai_device.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "5847cbc01aa4007b"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/xiaozhi_service.c",
+      "line": 57,
+      "snippet": "#include \"ai_punch.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "e4c1ec68fc021347"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/xiaozhi_service.c",
+      "line": 58,
+      "snippet": "#include \"ai_action.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "400f3ee61612aa07"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/ai/xiaozhi_service.c",
+      "line": 59,
+      "snippet": "#include \"ai_music.h\"",
+      "message": "反向依赖：services(ai) -> business(ai)，应改为回调/事件或注入",
+      "fingerprint": "fe1c55504cc7f508"
+    },
+    {
+      "rule": "G3",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/audio/audio_service.h",
+      "line": 24,
+      "snippet": "#include \"esp_codec_dev.h\"",
+      "message": "公共头暴露板级/硬件类型，消费者被迫继承硬件依赖",
+      "fingerprint": "98b966c5c7b50686"
+    },
+    {
+      "rule": "G3",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/audio/mic_frontend.h",
+      "line": 42,
+      "snippet": "#include \"esp_codec_dev.h\"",
+      "message": "公共头暴露板级/硬件类型，消费者被迫继承硬件依赖",
+      "fingerprint": "1af0c60cc0b11df8"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "drivers",
+      "path": "main/middleware/camera/camera_service.c",
+      "line": 19,
+      "snippet": "#include \"face_service.h\"",
+      "message": "反向依赖：drivers(camera) -> services(camera)，应改为回调/事件或注入",
+      "fingerprint": "0bb96f97f81ad465"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "drivers",
+      "path": "main/middleware/camera/camera_service.c",
+      "line": 20,
+      "snippet": "#include \"face_recog_service.h\"    /* ★ §73：住户报告要报识别引擎是否还占着模型 */",
+      "message": "反向依赖：drivers(camera) -> services(camera)，应改为回调/事件或注入",
+      "fingerprint": "973cd21c385a4635"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "drivers",
+      "path": "main/middleware/camera/camera_service.c",
+      "line": 21,
+      "snippet": "#include \"viewfinder.h\"            /* ★ §73：住户报告要报共享解码缓冲 */",
+      "message": "反向依赖：drivers(camera) -> services(camera)，应改为回调/事件或注入",
+      "fingerprint": "e82db601f4586005"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "drivers",
+      "path": "main/middleware/camera/face_quality.h",
+      "line": 39,
+      "snippet": "#include \"face_service.h\"        /* vision_result_t */",
+      "message": "反向依赖：drivers(main/middleware/camera) -> services(camera)，应改为回调/事件或注入",
+      "fingerprint": "6a8c6d20d3183ca5"
+    },
+    {
+      "rule": "G4",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/camera/face_service.cpp",
+      "line": 27,
+      "snippet": "#include \"lvgl.h\"",
+      "message": "中间层 include UI/LVGL，层次倒置",
+      "fingerprint": "3bf96aabab135872"
+    },
+    {
+      "rule": "G3",
+      "severity": "high",
+      "layer": "drivers",
+      "path": "main/middleware/camera/ov3660_fmt.h",
+      "line": 54,
+      "snippet": "#include \"esp_cam_sensor_types.h\"",
+      "message": "公共头暴露板级/硬件类型，消费者被迫继承硬件依赖",
+      "fingerprint": "2ba5a08ee2e2fae2"
+    },
+    {
+      "rule": "G4",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/net/screen_shot.c",
+      "line": 20,
+      "snippet": "#include \"lvgl.h\"",
+      "message": "中间层 include UI/LVGL，层次倒置",
+      "fingerprint": "2812e70f5828af23"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/net/web_server.c",
+      "line": 48,
+      "snippet": "#include \"middleware/camera/punch_service.h\"",
+      "message": "反向依赖：services(main/middleware/net) -> business(camera)，应改为回调/事件或注入",
+      "fingerprint": "a83f2646b0b53222"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "services",
+      "path": "main/middleware/net/web_server.c",
+      "line": 56,
+      "snippet": "#include \"middleware/media/wallpaper_service.h\"     /* ★ §75 补充 2：壁纸管理 */",
+      "message": "反向依赖：services(main/middleware/net) -> business(media)，应改为回调/事件或注入",
+      "fingerprint": "7633990a6131f15d"
+    },
+    {
+      "rule": "G1",
+      "severity": "high",
+      "layer": "drivers",
+      "path": "main/middleware/periph/button_service.c",
+      "line": 24,
+      "snippet": "#include \"mic_frontend.h\"",
+      "message": "反向依赖：drivers(main/middleware/periph) -> services(main/middleware/audio)，应改为回调/事件或注入",
+      "fingerprint": "57b7b7210fea29b6"
+    },
+    {
+      "rule": "G4",
+      "severity": "high",
+      "layer": "platform",
+      "path": "main/platform/port_display.h",
+      "line": 28,
+      "snippet": "#include \"lvgl.h\"",
+      "message": "中间层 include UI/LVGL，层次倒置",
+      "fingerprint": "a9fbf9e7db41989c"
+    },
+    {
+      "rule": "G6",
+      "severity": "medium",
+      "layer": "mixed",
+      "path": "<graph>",
+      "line": 0,
+      "snippet": "services:ai <-> services:camera <-> services:main/middleware/audio <-> services:main/middleware/net <-> services:media",
+      "message": "模块环（5 个成员）：改动任一方都会波及全体",
+      "fingerprint": "f787418da44e9588"
+    },
+    {
+      "rule": "G5",
+      "severity": "medium",
+      "layer": "drivers",
+      "path": "main/middleware/periph/fs_service.h",
+      "line": 31,
+      "snippet": "extern uint8_t *file_buffer;",
+      "message": "公共头里的 extern 可变全局，跨模块共享状态",
+      "fingerprint": "907f5b2c6f26ee62"
+    },
+    {
+      "rule": "G5",
+      "severity": "medium",
+      "layer": "drivers",
+      "path": "main/middleware/periph/fs_service.h",
+      "line": 32,
+      "snippet": "extern size_t file_buffer_size;",
+      "message": "公共头里的 extern 可变全局，跨模块共享状态",
+      "fingerprint": "5fb0a6df07778e5e"
+    }
+  ]
+}

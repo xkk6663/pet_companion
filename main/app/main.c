@@ -14,13 +14,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_bus.h"
+#include "platform/port_display.h"
 
 #include "ui/ui_manager/page_manager.h"
-#include "ui/page_splash.h"
 #include "ui/page_main.h"
 #include "ui/overlay_manager.h"
 #include "ui/ui_binfont.h"
+#include "ui/punch_watermark_ui.h"   /* ★ P2：水印渲染实现（注册给业务槽） */
 #include "middleware/audio/audio_service.h"
 #include "middleware/audio/mic_monitor.h"   /* ★ REC 双麦频域/响度可视化后端 */
 #include "middleware/audio/rec_local_service.h"
@@ -29,6 +30,7 @@
 #include "middleware/bluetooth/bt_audio_service.h"   /* ★ A2DP Source 底座 */
 #include "middleware/bluetooth/bt_push_service.h"    /* ★ A2DP Source 推流管线 */
 #include "middleware/ai/xiaozhi_service.h"
+#include "middleware/ai/ai_action_endpoints.h"   /* ★ P2：网页动作端点登记 */
 #include "middleware/ai/cloud_media_service.h"   /* ★ S9 P6：云端生图落盘 */
 #include "middleware/periph/fs_service.h"
 #include "middleware/periph/sdcard_service.h"
@@ -53,31 +55,11 @@
 
 static const char *TAG = "main";
 
-/* 本次上电周期内，开机提示音是否已播过（只在第一次上滑进主界面时播一次） */
-static bool s_boot_tone_played __attribute__((unused)) = false;
+/* ★ 2026-11-20：开机不再走 splash "上滑开屏"。
+ *   原来的 on_splash_enter()（splash 上滑 → 压入 Page_Main）随开机直进主页一并删除；
+ *   Page_Splash 不再作为根页/开屏页，改成**按需拉起的屏保页**（SET 长按 ≥3 s，
+ *   见 page_main.c，视觉仍是原来的壁纸+粒子+上滑提示）。 */
 
-/* Swipe-up on splash recognized -> push the main page. */
-static void on_splash_enter(void)
-{
-    /* ★ P0-1 补盲区：原来"after splash load"之后直到底层 camera 埋点才有下一行，
-     *   中间把 WiFi 关联 / TLS / 主页构建全糊在一起（实测内部 largest 就在这段里
-     *   从 90,112 掉到 55,296）。这里按"进主页前/后"切开。 */
-    MEM_STAGE(TAG, "splash->main: pre");
-    PageManager_Load(&Page_Main);
-    MEM_STAGE(TAG, "splash->main: post");
-
-    // /* 第一次上滑进主界面：自动播放一次开机提示音 */
-    // if (!s_boot_tone_played) {
-    //     s_boot_tone_played = true;
-    //     audio_cmd_t cmd = {
-    //         .id = AUDIO_CMD_PLAY_FILE,
-    //         .value = 0,
-    //     };
-    //     snprintf(cmd.path, sizeof(cmd.path), "%s/boot_tone.wav", FS_MNT_PATH);
-    //     audio_service_post_cmd(&cmd);
-    //     ESP_LOGI(TAG, "boot tone requested: %s", cmd.path);
-    // }
-}
 
 /* Wi-Fi status -> main-interface RGB LED (red / blue breathe / green) */
 static void on_wifi_evt(wifi_evt_t evt, const char *info)
@@ -732,6 +714,58 @@ static void stack_hwm_cb(lv_timer_t *t)
     }
 }
 
+/* ===========================================================================
+ *  ★ P2（2026-11-20）：flash 静默窗口的"让出者"接线（组合根）
+ *
+ *  为什么放在 app：这三条认知（录像/取景/音乐 各自怎么让出）原本写在
+ *  flash_guard.c 里，导致一个 flash 保护闸反向依赖音频服务、相机服务和录像业务。
+ *  现在把"谁需要让出"的认知收在**组合根**：本文件同时认识两边，flash_guard
+ *  与那些模块彼此完全不相识（单向、可单测、换实现不动对方）。
+ * ------------------------------------------------------------------------- */
+static bool fg_rec_busy(void)
+{
+    /* 录像的 fwrite 正在往 SD 写，同时 DVP DMA 还在往 PSRAM 搬 */
+    return record_video_service_is_recording() ||
+           record_video_service_state() != VIDEO_REC_IDLE;
+}
+
+static bool fg_vf_calm(void)
+{
+    if (!viewfinder_is_enabled()) {
+        return false;
+    }
+    viewfinder_disable();
+    return true;
+}
+
+static void fg_vf_restore(void)
+{
+    viewfinder_enable();
+}
+
+static bool fg_mp_calm(void)
+{
+    if (!(media_player_service_is_playing() && !media_player_service_is_paused())) {
+        return false;
+    }
+    return media_player_service_pause() == ESP_OK;
+}
+
+static void fg_mp_restore(void)
+{
+    media_player_service_resume();
+}
+
+static void flash_guard_wire(void)
+{
+    static const flash_guard_client_t cli_rec = { "recording",  fg_rec_busy, NULL,        NULL };
+    static const flash_guard_client_t cli_vf  = { "viewfinder", NULL,        fg_vf_calm, fg_vf_restore };
+    static const flash_guard_client_t cli_mp  = { "music",      NULL,        fg_mp_calm, fg_mp_restore };
+    flash_guard_register(&cli_rec);
+    flash_guard_register(&cli_vf);
+    flash_guard_register(&cli_mp);
+}
+
 void app_main(void)
 {
     /* ★ P0-1 分步内存账单（docs/开发文档/内存优化可执行方案.md §4-P0-1）。
@@ -854,7 +888,7 @@ void app_main(void)
     punch_service_init();
     MEM_STAGE(TAG, "after punch_service_init");
 
-    bsp_i2c_init();
+    bus_i2c_init();
     MEM_STAGE(TAG, "after bsp_i2c_init");
 
     /* ★ P1-4 + P2-4（2026-09-25 按实测收敛）：taskLVGL 任务栈 7168 -> 16384 -> **12288**。
@@ -886,37 +920,25 @@ void app_main(void)
      * ⚠ S8-2 提醒：MFN 推理（实测 324 ms）**绝不能放进这条线程** —— 它既会卡掉 6.5 帧预览，
      *   也会让这个栈数再跳一截（S8-0 探针就是为它在 Core0 单开了 10240 栈）。
      *   ⇒ 识别必须由 cam_task 侧的 poll 驱动，与预览帧率解耦。 */
-    bsp_display_cfg_t dsp_cfg = {
-        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size = BSP_LCD_H_RES * CONFIG_BSP_LCD_DRAW_BUF_HEIGHT,
-#if CONFIG_BSP_LCD_DRAW_BUF_DOUBLE
-        .double_buffer = 1,
-#else
-        .double_buffer = 0,
-#endif
-        .flags = {
-            .buff_dma = true,
-            .buff_spiram = false,
-            .sw_rotate = false,
-        }
-    };
-    /* 不能写进上面的指定初始化器 —— 整体初始化 .lvgl_port_cfg 后再覆盖子成员会触发
-     * -Woverride-init。 */
-    dsp_cfg.lvgl_port_cfg.task_stack = 9728;
-    bsp_display_start_with_config(&dsp_cfg);
+    /* ★ 2026-11-20 分层改造：显示初始化整体搬入 platform/port_display.c。
+     *   行为逐字不变：同样的 cfg / double_buffer / flags，同样的
+     *   task_stack = BOARD_LVGL_TASK_STACK(9728)，同样在 bsp_i2c_init 之后、
+     *   ui_binfont_attach 之前。app 不再认识任何 BSP 类型或几何宏。 */
+    disp_start();
     MEM_STAGE(TAG, "after bsp_display_start");
 
     /* ★ §50 阶段 2：lv_init() 已在 bsp_display_start 内完成，纯 RAM 解析
      *   成 LVGL 运行时字体（dynamic_glyph_load=ON，位图按需现读）。失败时
      *   ui_binfont_get() 返 NULL，tab_ai 自动回退 cn_20。 */
     ui_binfont_attach();
+    punch_watermark_ui_init();   /* ★ P2：把水印渲染注册进 punch_watermark 槽（无 UI 也能跑） */
     MEM_STAGE(TAG, "after ui_binfont_attach");
 
-    bsp_display_lock(0);
+    disp_lock();
     lv_timer_create(stack_hwm_cb, 10000, NULL);
-    bsp_display_unlock();
+    disp_unlock();
 
-    //bsp_display_brightness_set(50);
+    //disp_brightness_set(50);
     fs_service_init();
     MEM_STAGE(TAG, "after fs_service_init");
     audio_service_init();
@@ -984,10 +1006,14 @@ void app_main(void)
     capture_service_init();
     record_video_service_init();
     record_video_service_repair_start();   /* P1：扫 /videos，修复掉电 AVI */
+    /* ★ P2：三个让出者登记进 flash_guard（必须在三个模块 init 之后，回调里才会碰它们的状态） */
+    flash_guard_wire();
     MEM_STAGE(TAG, "after capture/record_video service init");
     /* ★ §74：网页管理端（httpd:80；AP 热点 http://192.168.4.1 与局域网
      *   http://<STA-IP> 均可访问；只读 SD + 打卡事件轮询）。放在 punch/
      *   camera/media 各服务之后 —— 订阅 punch 完成回调要求其已 init。 */
+    /* ★ P2：业务动作端点必须在 web 服务起路由**之前**登记（注册表只读启动） */
+    ai_action_endpoints_init();
     web_server_init();
     MEM_STAGE(TAG, "after web_server_init");
     /* ★ S9 P6：云端图片（生图 / 拍照解释的配图）下载 → SD → 硬件解码 → 桌宠显示。
@@ -998,8 +1024,8 @@ void app_main(void)
     /* ★ §75：壁纸服务（SD /wallpaper 池 + 10min 随机轮换 + NVS 断电记忆 +
      *   双缓冲解码）。位置两头的约束：
      *   · 必须在 fs_service_init() 之后 —— file_buffer 被借用为双缓冲之一；
-     *   · 必须在 Page_Splash 装载之前 —— 开机要在这里同步解码"上次壁纸"
-     *     （SD 读 + JPEG 解码几百 ms），splash 粒子层与下拉浮层都直接消费结果。 */
+     *   · 必须在 Page_Main 装载之前 —— 开机要在这里同步解码"上次壁纸"
+     *     （SD 读 + JPEG 解码几百 ms），下拉浮层（= 屏保）与壁纸池都直接消费结果。 */
     wallpaper_service_init();
     MEM_STAGE(TAG, "after wallpaper_service_init");
     /* 默认上电 STA 模式（自动连已保存路由）；UI 可切 AP 开热点 */
@@ -1007,15 +1033,18 @@ void app_main(void)
     /* UI framework */
     PageManager_Init();
     MEM_STAGE(TAG, "after PageManager_Init");
-    page_splash_set_enter_cb(on_splash_enter);
-    PageManager_Load(&Page_Splash);     /* stack root */
-    MEM_STAGE(TAG, "after splash load");
+    /* ★ 2026-11-20：上电直接进主界面（CAM 页 = 页 0，建页后自动拉起预览），
+     *   不再先装 Page_Splash 等用户上滑。Page_Splash 改为"按需拉起的屏保页"
+     *   （SET 长按 ≥3 s），页面不再常驻；粒子 canvas 缓冲在主页建页时预分配一次、
+     *   之后每次开屏保复用（见 page_main.c / overlay_wp_particles.c）。 */
+    PageManager_Load(&Page_Main);       /* stack root */
+    MEM_STAGE(TAG, "after main page load");
 
     /* ★ P0：走到这里说明 FS/显示/音频/Wi-Fi/Web/UI 全链路都活着，
      *   清掉启动失败计数；下一次若在到达这里之前崩，计数会重新累计。 */
     boot_guard_mark_ready();
 
-    ESP_LOGI(TAG, "boot done, waiting swipe up");
+    ESP_LOGI(TAG, "boot done, CAM tab active (camera autostart armed)");
 
 #if PANEL_PROBE_ENABLE
     /* ★ 放在最后启动：不污染上面的开机分步内存账单（探针自己吃 16 KB 内部 RAM）。 */

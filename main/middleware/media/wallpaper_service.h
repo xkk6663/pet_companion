@@ -42,7 +42,8 @@ extern "C" {
  * @brief 初始化壁纸服务（app_main 串行路径调用，含同步解码）。
  *
  * 顺序要求：必须在 fs_service_init()（file_buffer 就位）之后、
- * Page_Splash 装载之前 —— 开机要同步解码"上次壁纸"（几百 ms）。
+ * Page_Main 装载之前 —— 开机要同步解码"上次壁纸"（几百 ms），
+ * 下拉浮层与屏保粒子层都直接借用该 buffer（零额外解码）。
  *
  * 恢复优先级：NVS wp_last（且文件在 SD 池中）→ SD 池随机 →
  * littlefs 兜底图（FS_MNT_PATH"/xwkkk.jpg"）→ 深蓝纯色（绝不黑屏崩机）。

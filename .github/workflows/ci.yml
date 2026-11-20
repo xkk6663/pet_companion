@@ -25,6 +25,8 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: 安装测试依赖
         run: pip install -r requirements-dev.txt
+      - name: 分层护栏（存量债务已登记，只许减少不许新增）
+        run: python tools/layering/layer_guard.py --root . --baseline tools/layering/layering_baseline.json --fail-on high
       - name: 脱机用例（网关单测 + 设备纯逻辑 host C 用例；gcc 由 runner 自带）
         run: python -m pytest -m "not hil" -q --junitxml=report/pytest.xml
       - name: 归档报告

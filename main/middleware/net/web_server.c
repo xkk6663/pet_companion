@@ -47,7 +47,6 @@
 #include "middleware/net/net_time_service.h"       /* ★ 校时状态（今日桶名字） */
 #include "middleware/camera/punch_service.h"
 #include "middleware/camera/camera_service.h"       /* P1：/stream.mjpg 低分辨率预览 */
-#include "middleware/camera/capture_service.h"      /* ★ S9 §3.5：/api/media/capture */
 #include "middleware/camera/jpeg_util.h"            /* ★ §76：截图 JPEG 软编 */
 #include "middleware/media/record_video_service.h"  /* P1：录像中拒绝 MJPEG */
 #include "middleware/periph/boot_guard.h"           /* P0：/api/recovery/clear */
@@ -56,10 +55,9 @@
 #include "middleware/media/avi_mjpeg_demuxer.h"
 #include "middleware/media/wallpaper_service.h"     /* ★ §75 补充 2：壁纸管理 */
 #include "middleware/net/web_server.h"
+#include "middleware/net/web_action.h"       /* ★ P2：业务动作端点注册表（本文件不再认识业务） */
 #include "middleware/net/wifi_manager.h"            /* ★ S9 §3.5：/api/system/status */
 #include "middleware/periph/safe_reboot.h"          /* ★ S9 §3.5：/api/system/reboot */
-#include "middleware/ai/ai_punch.h"                 /* ★ S9 §3.6：ai_punch_trigger */
-#include "middleware/ai/ai_light.h"                 /* ★ S9 §3.5：灯控端点 */
 #include "middleware/ai/xiaozhi_service.h"          /* ★ S9 §3.5：/api/media/play、状态 */
 #include "middleware/ai/ws_client.h"                /* ★ S9 §3.5：状态里的链路信息 */
 
@@ -1154,131 +1152,6 @@ static int read_body(httpd_req_t *req, char *buf, size_t cap)
 }
 
 /* ---------------------------------------------------------------------------
- *  POST /api/punch —— 触发人脸打卡（受理即 202，结论轮询 /api/action/result）
- * ------------------------------------------------------------------------- */
-static esp_err_t handler_api_punch(httpd_req_t *req)
-{
-    log_req(req, "action/punch");
-
-    esp_err_t e = ai_punch_trigger();
-    if (e == ESP_OK) {
-        uint32_t g = act_accept(ACT_PUNCH);
-        char body[96];
-        snprintf(body, sizeof(body),
-                 "{\"ok\":1,\"accepted\":1,\"gen\":%u,\"action\":\"punch\"}",
-                 (unsigned)g);
-        httpd_resp_set_status(req, "202 Accepted");
-        return send_json(req, body);
-    }
-
-    /* 拒绝：会话在跑或相机被页占用 —— 前端据 error 提示，不必重试 */
-    const char *why = (e == ESP_ERR_INVALID_STATE) ? "busy" : "no_mem";
-    char body[96];
-    snprintf(body, sizeof(body), "{\"error\":\"%s\",\"busy\":%d}",
-             why, ai_punch_busy() ? 1 : 0);
-    httpd_resp_set_status(req, "409 Conflict");
-    return send_json(req, body);
-}
-
-/* ---------------------------------------------------------------------------
- *  POST /api/media/capture —— 拍照存 SD（受理即 202）
- * ------------------------------------------------------------------------- */
-static esp_err_t handler_api_capture(httpd_req_t *req)
-{
-    log_req(req, "action/capture");
-
-    esp_err_t e = capture_service_request();
-    if (e != ESP_OK) {
-        httpd_resp_set_status(req, "409 Conflict");
-        return send_json(req, "{\"error\":\"busy_or_no_sd\"}");
-    }
-    uint32_t g = act_accept(ACT_CAPTURE);
-    char body[96];
-    snprintf(body, sizeof(body),
-             "{\"ok\":1,\"accepted\":1,\"gen\":%u,\"action\":\"capture\"}",
-             (unsigned)g);
-    httpd_resp_set_status(req, "202 Accepted");
-    return send_json(req, body);
-}
-
-/* ---------------------------------------------------------------------------
- *  POST /api/media/play?url=...  —— 播放一个音频 URL（点歌 / TTS 自测）
- *  ★ 走 xiaozhi_service_cloud_audio_play：会话不在时会自动起会话并挂起播放
- *    （桌宠主动推送场景），所以"受理"不等于"马上出声"。
- * ------------------------------------------------------------------------- */
-static esp_err_t handler_api_play(httpd_req_t *req)
-{
-    log_req(req, "action/play");
-
-    char url[512] = "";
-    if (query_get(req, "url", url, sizeof(url)) != ESP_OK || url[0] == '\0') {
-        /* 也接受 JSON body：{"url":"http://..."}（长 URL 走 query 易被截断） */
-        char body[512];
-        if (read_body(req, body, sizeof(body)) > 0) {
-            const char *p = strstr(body, "\"url\"");
-            if (p) {
-                p = strchr(p, ':');
-                if (p) {
-                    p = strchr(p, '"');
-                    if (p) {
-                        p++;
-                        const char *q = strchr(p, '"');
-                        if (q && (size_t)(q - p) < sizeof(url)) {
-                            memcpy(url, p, (size_t)(q - p));
-                            url[q - p] = '\0';
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if (url[0] == '\0') {
-        httpd_resp_set_status(req, "400 Bad Request");
-        return send_json(req, "{\"error\":\"no_url\"}");
-    }
-
-    esp_err_t e = xiaozhi_service_cloud_audio_play(url);
-    if (e != ESP_OK) {
-        httpd_resp_set_status(req, "503 Service Unavailable");
-        return send_json(req, "{\"error\":\"play_failed\"}");
-    }
-    uint32_t g = act_accept(ACT_PLAY);
-    char body[128];
-    snprintf(body, sizeof(body),
-             "{\"ok\":1,\"accepted\":1,\"gen\":%u,\"action\":\"play\"}", (unsigned)g);
-    httpd_resp_set_status(req, "202 Accepted");
-    return send_json(req, body);
-}
-
-/* ---------------------------------------------------------------------------
- *  POST /api/light/set  —— {"power":true,"rgb":[r,g,b],"brightness":0..100}
- *  GET  /api/light/get  —— 当前灯状态
- *  快端点：一次 led_service 队列 post，同步可（< 1 ms）
- * ------------------------------------------------------------------------- */
-static esp_err_t handler_api_light_set(httpd_req_t *req)
-{
-    log_req(req, "action/light_set");
-
-    char body[256];
-    if (read_body(req, body, sizeof(body)) <= 0) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        return send_json(req, "{\"error\":\"no_body\"}");
-    }
-    esp_err_t e = ai_light_set_json(body);
-    if (e != ESP_OK) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        return send_json(req, "{\"error\":\"bad_json\"}");
-    }
-    return send_json(req, ai_light_state_json());
-}
-
-static esp_err_t handler_api_light_get(httpd_req_t *req)
-{
-    log_req(req, "action/light_get");
-    return send_json(req, ai_light_state_json());
-}
-
-/* ---------------------------------------------------------------------------
  *  POST /api/system/reboot —— 有序软重启（延迟 200ms，先把 202 发出去）
  * ------------------------------------------------------------------------- */
 static void reboot_task(void *arg)
@@ -1352,67 +1225,9 @@ static esp_err_t handler_api_status(httpd_req_t *req)
              xiaozhi_service_tts_active() ? "true" : "false",
              xiaozhi_service_music_playing() ? "true" : "false",
              xiaozhi_service_get_volume(),
-             ai_punch_busy() ? "true" : "false",
-             (int)capture_service_state());
-    return send_json(req, body);
-}
-
-/* ---------------------------------------------------------------------------
- *  GET /api/action/result?gen=N —— 动作结果轮询（gen 模式，1 s 一拍）
- *
- *   gen == 当前 → {"gen":G,"action":"...","state":"running"|"idle"}
- *   gen != 当前 → 带结论。punch 的结论是**人话句子**（ai_punch_last_result），
- *                 capture 是 err/path/bytes。
- * ------------------------------------------------------------------------- */
-static esp_err_t handler_api_result(httpd_req_t *req)
-{
-    log_req(req, "action/result");
-
-    char gen_s[16] = "0";
-    query_get(req, "gen", gen_s, sizeof(gen_s));
-    uint32_t client_gen = (uint32_t)strtoul(gen_s, NULL, 10);
-
-    act_id_t id;
-    uint32_t cur_gen, elapsed_ms;
-    act_snapshot(&id, &cur_gen, &elapsed_ms);
-
-    char body[512];
-
-    if (cur_gen != client_gen && id == ACT_PUNCH) {
-        bool busy = ai_punch_busy();
-        const char *txt = ai_punch_last_result();
-        char esc[320];
-        json_esc(esc, sizeof(esc), txt ? txt : "");
-        snprintf(body, sizeof(body),
-                 "{\"gen\":%u,\"action\":\"punch\",\"state\":\"%s\","
-                 "\"ok\":%s,\"elapsed_ms\":%u,\"text\":\"%s\"}",
-                 (unsigned)cur_gen, busy ? "running" : "done",
-                 (!busy && strncmp(txt ? txt : "", "Punched:", 8) == 0) ? "true" : "false",
-                 (unsigned)elapsed_ms, esc);
-    } else if (cur_gen != client_gen && id == ACT_CAPTURE) {
-        capture_result_t cr;
-        capture_service_get_result(&cr);
-        bool busy = (capture_service_state() == CAPTURE_BUSY);
-        char esc[CAPTURE_PATH_MAX * 2];
-        json_esc(esc, sizeof(esc), cr.path);
-        snprintf(body, sizeof(body),
-                 "{\"gen\":%u,\"action\":\"capture\",\"state\":\"%s\","
-                 "\"ok\":%s,\"err\":\"%s\",\"path\":\"%s\",\"bytes\":%u,"
-                 "\"elapsed_ms\":%u}",
-                 (unsigned)cur_gen, busy ? "running" : "done",
-                 (!busy && cr.err == ESP_OK) ? "true" : "false",
-                 esp_err_to_name(cr.err), esc, (unsigned)cr.bytes,
-                 (unsigned)cr.elapsed_ms);
-    } else if (cur_gen != client_gen && (id == ACT_PLAY || id == ACT_REBOOT)) {
-        snprintf(body, sizeof(body),
-                 "{\"gen\":%u,\"action\":\"%s\",\"state\":\"done\",\"ok\":true,"
-                 "\"elapsed_ms\":%u}",
-                 (unsigned)cur_gen, s_act_name[id], (unsigned)elapsed_ms);
-    } else {
-        /* 无新动作（或 gen 已对齐）：只回代际号，前端继续轮 */
-        snprintf(body, sizeof(body), "{\"gen\":%u,\"action\":\"none\"}",
-                 (unsigned)cur_gen);
-    }
+             /* ★ P2：业务忙态由业务侧注册的 provider 回答（本文件不认识业务模块） */
+             web_busy_punch() ? "true" : "false",
+             web_busy_capture() ? 1 : 0);
     return send_json(req, body);
 }
 
@@ -1827,6 +1642,56 @@ static esp_err_t handler_api_recovery_clear(httpd_req_t *req)
 /* ---------------------------------------------------------------------------
  *  启动
  * ------------------------------------------------------------------------- */
+/* ===========================================================================
+ *  ★ P2：把内部小工具导出给业务 handler 复用（web_action.h 声明）
+ *  只加薄包装，原有 static 实现与语义一字不动。
+ * ------------------------------------------------------------------------- */
+void web_log_req(httpd_req_t *req, const char *what)
+{
+    log_req(req, what);
+}
+
+esp_err_t web_send_json(httpd_req_t *req, const char *body)
+{
+    return send_json(req, body);
+}
+
+int web_read_body(httpd_req_t *req, char *buf, size_t cap)
+{
+    return read_body(req, buf, cap);
+}
+
+esp_err_t web_query_get(httpd_req_t *req, const char *key, char *out, size_t outlen)
+{
+    return query_get(req, key, out, outlen);
+}
+
+const char *web_json_esc(char *dst, size_t dstlen, const char *src)
+{
+    return json_esc(dst, dstlen, src);
+}
+
+uint32_t web_act_accept(web_act_id_t id)
+{
+    return act_accept((act_id_t)id);
+}
+
+void web_act_snapshot(web_act_id_t *id, uint32_t *gen, uint32_t *elapsed_ms)
+{
+    act_id_t i = ACT_NONE;
+    act_snapshot(&i, gen, elapsed_ms);
+    *id = (web_act_id_t)i;
+}
+
+const char *web_act_name(web_act_id_t id)
+{
+    int i = (int)id;
+    if (i < 0 || i >= (int)(sizeof(s_act_name) / sizeof(s_act_name[0]))) {
+        return "none";
+    }
+    return s_act_name[i];
+}
+
 static const httpd_uri_t s_uris[] = {
     { .uri = "/",                    .method = HTTP_GET,    .handler = handler_index,             .user_ctx = NULL },
     { .uri = "/api/companion/stats", .method = HTTP_GET,    .handler = handler_companion_stats,   .user_ctx = NULL },
@@ -1842,14 +1707,8 @@ static const httpd_uri_t s_uris[] = {
     { .uri = "/api/upload",          .method = HTTP_POST,   .handler = handler_upload,            .user_ctx = NULL },
     { .uri = "/api/file",            .method = HTTP_DELETE, .handler = handler_file_delete,       .user_ctx = NULL },
     /* ---- S9 §3.5 动作端点（受理即返回；长事务走 gen 轮询）---- */
-    { .uri = "/api/punch",           .method = HTTP_POST,   .handler = handler_api_punch,         .user_ctx = NULL },
-    { .uri = "/api/light/set",       .method = HTTP_POST,   .handler = handler_api_light_set,     .user_ctx = NULL },
-    { .uri = "/api/light/get",       .method = HTTP_GET,    .handler = handler_api_light_get,     .user_ctx = NULL },
-    { .uri = "/api/media/capture",   .method = HTTP_POST,   .handler = handler_api_capture,       .user_ctx = NULL },
-    { .uri = "/api/media/play",      .method = HTTP_POST,   .handler = handler_api_play,          .user_ctx = NULL },
     { .uri = "/api/system/reboot",   .method = HTTP_POST,   .handler = handler_api_reboot,        .user_ctx = NULL },
     { .uri = "/api/system/status",   .method = HTTP_GET,    .handler = handler_api_status,        .user_ctx = NULL },
-    { .uri = "/api/action/result",   .method = HTTP_GET,    .handler = handler_api_result,        .user_ctx = NULL },
     /* ---- P0/P1：安全模式出口 + 低分辨率实时预览 ---- */
     { .uri = "/api/recovery/clear",  .method = HTTP_POST,   .handler = handler_api_recovery_clear, .user_ctx = NULL },
     { .uri = "/stream.mjpg",         .method = HTTP_GET,    .handler = handler_stream_mjpg,       .user_ctx = NULL },
@@ -1900,6 +1759,17 @@ esp_err_t web_server_init(void)
     }
     for (size_t i = 0; i < sizeof(s_uris) / sizeof(s_uris[0]); i++) {
         ESP_ERROR_CHECK(httpd_register_uri_handler(server, &s_uris[i]));
+    }
+
+    /* ★ P2：业务动作端点（谁登记谁负责实现；本文件零业务认知） */
+    for (size_t i = 0; i < web_action_count(); i++) {
+        httpd_uri_t u = {
+            .uri     = web_action_uri(i),
+            .method  = web_action_method(i),
+            .handler = web_action_fn_at(i),
+            .user_ctx = NULL,
+        };
+        ESP_ERROR_CHECK(httpd_register_uri_handler(server, &u));
     }
     s_started = true;
     ESP_LOGI(TAG, "web server ready: %u endpoints, port %d "

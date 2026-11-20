@@ -18,7 +18,7 @@
 #include "freertos/semphr.h"
 
 #include "middleware/periph/sdcard_service.h"
-#include "middleware/net/net_time_service.h"
+#include "platform/port_time.h"   /* ★ P2：分桶日期只认平台层可信时间 */
 
 #define TAG "COMPANION_ST"
 
@@ -59,13 +59,14 @@ static void ensure_dir(void)
     (void)mkdir(CS_DIR, 0777);
 }
 
-/** 桶名：已校时 → 日期；未校时 → nodate（"所有日子的合计池"） */
+/** 桶名：已校时 → 日期；未校时 → nodate（"所有日子的合计池"）
+ *  ★ P2：改读 platform/port_time（唯一可信时间入口），不再反向依赖 net_time_service
+ *    —— 陪伴统计是驱动级"落盘分桶"，不该认识 WiFi 校时服务。 */
 static void bucket_name(char *out, size_t cap)
 {
-    net_time_t nt;
-    net_time_service_get(&nt);
-    if (nt.valid) {
-        snprintf(out, cap, "d_%04d-%02d-%02d", nt.year, nt.mon, nt.day);
+    int y = 0, mo = 0, d = 0;
+    if (port_time_date(&y, &mo, &d)) {
+        snprintf(out, cap, "d_%04d-%02d-%02d", y, mo, d);
     } else {
         snprintf(out, cap, "d_nodate");
     }

@@ -21,7 +21,7 @@
  *      `recog_pump()` / `draw_watermark()` / 录入流程**全部**在 LVGL 线程里 ——
  *      它们碰 LVGL 对象、碰字体、起任务，但**从不阻塞等待**任何慢操作。
  */
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 #include "tab_camera.h"
 #include "ui_theme.h"
@@ -152,6 +152,7 @@ static lv_obj_t *s_recog_label;      /* ★ S8-2：识别/打卡结果标签（�
 static lv_obj_t *s_status;
 static lv_obj_t *s_screen;
 static lv_timer_t *s_timer;
+static lv_timer_t *s_boot_tm;   /* 开机自动开预览的一次性 timer（见 autostart_cb） */
 static uint16_t *s_canvas_buf;
 static volatile const uint8_t *s_last_frame;
 static volatile bool s_frame_new;
@@ -2054,6 +2055,31 @@ static void recog_ensure_init(void)
     ESP_LOGI(TAG, "S8-2 services initialised");
 }
 
+/* ★ 2026-11-20：上电直进 CAM 页 ⇒ 建页后自动拉起 RGB565 预览（等价于按一次 START）。
+ *   延时 100 ms 跑：等 tabview 首帧上屏，也避开 page create 的同一帧。
+ *   相机已被别人占着（比如残留的 MEDIA 流）就只同步按钮文案，不抢流。 */
+static void autostart_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_boot_tm = NULL;   /* repeat_count=1：本回调返回后 timer 自删，句柄立刻作废 */
+    if (camera_service_is_running()) {
+        if (camera_service_owner() == CAM_OWNER_PREVIEW) {
+            lv_label_set_text_static(s_btn_label, "STOP");
+            lv_label_set_text_static(s_status, "Preview running");
+        }
+        return;
+    }
+    esp_err_t err = camera_service_start(on_frame, NULL);
+    if (err == ESP_OK) {
+        lv_label_set_text_static(s_btn_label, "STOP");
+        lv_label_set_text_static(s_status, "Preview running");
+        ESP_LOGI(TAG, "CAM preview autostart on boot");
+    } else {
+        lv_label_set_text_static(s_status, "Camera open failed");
+        ESP_LOGE(TAG, "CAM autostart failed: %s", esp_err_to_name(err));
+    }
+}
+
 void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
 {
     s_screen = screen;
@@ -2386,7 +2412,7 @@ void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
      *     24(msg) + 40(ta) + 200(kb) + 40(btn) + 24(pad) + 16(pad_all) = 344 < 360 ✅
      * ======================================================================= */
     s_enroll_ov = lv_obj_create(screen);
-    lv_obj_set_size(s_enroll_ov, BSP_LCD_H_RES - 60, 360);
+    lv_obj_set_size(s_enroll_ov, BOARD_LCD_H_RES - 60, 360);
     lv_obj_set_ignore_layout(s_enroll_ov, true);
     lv_obj_align(s_enroll_ov, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_enroll_ov, COL_CARD, 0);
@@ -2407,7 +2433,7 @@ void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
     lv_obj_set_style_text_font(s_enroll_msg, UI_FONT, 0);
 
     s_enroll_ta = lv_textarea_create(s_enroll_ov);
-    lv_obj_set_size(s_enroll_ta, BSP_LCD_H_RES - 100, 40);
+    lv_obj_set_size(s_enroll_ta, BOARD_LCD_H_RES - 100, 40);
     lv_textarea_set_one_line(s_enroll_ta, true);
     /* ★ 12 字节上限 ≈ 4 个汉字 —— 与 face_db 的 FACE_NAME_MAX(24 B) 是两回事：
      *   这里限制的是"输入"，超长会在 enroll_start_cb 里按 UTF-8 边界再截一次。
@@ -2419,12 +2445,12 @@ void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
     lv_obj_add_event_cb(s_enroll_ta, enroll_ta_ready_cb, LV_EVENT_READY, NULL);
 
     s_enroll_kb = lv_keyboard_create(s_enroll_ov);
-    lv_obj_set_size(s_enroll_kb, BSP_LCD_H_RES - 100, 200);
+    lv_obj_set_size(s_enroll_kb, BOARD_LCD_H_RES - 100, 200);
     lv_keyboard_set_textarea(s_enroll_kb, s_enroll_ta);
 
     {
         lv_obj_t *row = lv_obj_create(s_enroll_ov);
-        lv_obj_set_size(row, BSP_LCD_H_RES - 100, 44);
+        lv_obj_set_size(row, BOARD_LCD_H_RES - 100, 44);
         lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(row, 0, 0);
         lv_obj_set_style_pad_all(row, 0, 0);
@@ -2460,6 +2486,12 @@ void tab_camera_build(lv_obj_t *screen, lv_group_t *group)
     /* ★ 手动打卡按钮也进编码器组：触摸之外多一条可用路径（不改变触摸行为）。 */
     if (group) lv_group_add_obj(group, s_btn_punch);
     s_timer = lv_timer_create(refresh, 50, NULL);
+
+    /* ★ 开机自动开相机：建页完成后 100 ms 一拍，跑 autostart_cb() 即自删。 */
+    s_boot_tm = lv_timer_create(autostart_cb, 100, NULL);
+    if (s_boot_tm) {
+        lv_timer_set_repeat_count(s_boot_tm, 1);
+    }
 }
 
 void tab_camera_destroy(void)
@@ -2489,6 +2521,7 @@ void tab_camera_destroy(void)
         ESP_LOGI(TAG, "page exit: det returned + unload requested");
     }
     if (s_timer) { lv_timer_del(s_timer); s_timer = NULL; }
+    if (s_boot_tm) { lv_timer_del(s_boot_tm); s_boot_tm = NULL; }
     /* ★★ §73.9（用户验收标准："cam 里面的 PSRAM 都是按需分配、即用即释放"）：
      *   画布缓冲 115,200 B 旧版建页分配后**永不释放** —— 一次 CAM 会话就永久
      *   占掉一块，还把它下游的空闲区切成两段（2026-09-28 深夜日志：viewfinder

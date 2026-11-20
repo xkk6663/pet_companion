@@ -11,11 +11,12 @@
 
 #include <stdio.h>
 
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 #include "esp_idf_version.h"
-#include "esp_littlefs.h"
+#include "platform/port_storage.h"
 #include "esp_heap_caps.h"
+#include "esp_system.h"                 /* esp_get_free_heap_size（原先靠 bsp 头间接带入） */
 
 #include "page_system.h"
 #include "ui_theme.h"
@@ -32,7 +33,7 @@ static void system_stat_timer_cb(lv_timer_t *t)
 {
     (void)t;
     size_t total = 0, used = 0;
-    if (esp_littlefs_info("storage", &total, &used) == ESP_OK) {
+    if (storage_fs_info(&total, &used) == ESP_OK) {
         int pct = total ? (int)((used * 100U) / total) : 0;
         char buf[96];
         snprintf(buf, sizeof(buf), "Storage  %u / %u KB  (%d%%)",
@@ -63,7 +64,7 @@ static lv_obj_t *system_create(lv_obj_t *parent)
     ui_common_title_bar(page, LV_SYMBOL_SETTINGS"  System");
 
     lv_obj_t *card = lv_obj_create(page);
-    lv_obj_set_size(card, BSP_LCD_H_RES - 40, 240);
+    lv_obj_set_size(card, BOARD_LCD_H_RES - 40, 240);
     lv_obj_set_style_bg_color(card, COL_CARD, 0);
     lv_obj_set_style_border_color(card, COL_BORDER, 0);
     lv_obj_set_style_border_width(card, 1, 0);
@@ -103,7 +104,7 @@ static lv_obj_t *system_create(lv_obj_t *parent)
 
     /* ---- Flash / storage 实时监视卡片 ---- */
     lv_obj_t *scard = lv_obj_create(page);
-    lv_obj_set_size(scard, BSP_LCD_H_RES - 40, 150);
+    lv_obj_set_size(scard, BOARD_LCD_H_RES - 40, 150);
     lv_obj_set_style_bg_color(scard, COL_CARD, 0);
     lv_obj_set_style_border_color(scard, COL_BORDER, 0);
     lv_obj_set_style_border_width(scard, 1, 0);
@@ -118,7 +119,7 @@ static lv_obj_t *system_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_storage_label, UI_FONT, 0);
 
     s_storage_bar = lv_bar_create(scard);
-    lv_obj_set_size(s_storage_bar, BSP_LCD_H_RES - 72, 14);
+    lv_obj_set_size(s_storage_bar, BOARD_LCD_H_RES - 72, 14);
     lv_bar_set_range(s_storage_bar, 0, 100);
     lv_obj_set_style_bg_color(s_storage_bar, COL_BG, LV_PART_MAIN);
     lv_obj_set_style_bg_color(s_storage_bar, COL_CYAN, LV_PART_INDICATOR);

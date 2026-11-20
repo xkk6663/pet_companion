@@ -16,7 +16,8 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_err.h"
-#include "bsp/esp-bsp.h"
+#include "bsp/esp-bsp.h"                 /* L1 驱动：codec 初始化必须走板级包 */
+#include "platform/board_map.h"
 #include "audio_service.h"
 #include "middleware/mem_diag.h"
 #include "3rd/ringbuf/ringbuf.h"
@@ -25,7 +26,7 @@ static const char *TAG = "AUDIO_SVC";
 
 /* ---- 内部状态 ---- */
 static esp_codec_dev_handle_t spk_codec_dev = NULL;
-#if BSP_CAPS_AUDIO_MIC
+#if BOARD_HAS_AUDIO_MIC
 static esp_codec_dev_handle_t mic_codec_dev = NULL;
 #endif
 static SemaphoreHandle_t audio_mux;
@@ -83,7 +84,7 @@ void audio_service_init(void)
     MEM_FAIL_FAST(spk_codec_dev, TAG, "bsp_audio_codec_speaker_init()", 0);
     esp_codec_dev_set_out_vol(spk_codec_dev, DEFAULT_VOLUME);
 
-#if BSP_CAPS_AUDIO_MIC
+#if BOARD_HAS_AUDIO_MIC
     mic_codec_dev = bsp_audio_codec_microphone_init();
     MEM_FAIL_FAST(mic_codec_dev, TAG, "bsp_audio_codec_microphone_init()", 0);
     esp_codec_dev_set_in_gain(mic_codec_dev, 50.0);
@@ -212,7 +213,7 @@ esp_err_t audio_service_ext_claim_exclusive(esp_codec_dev_handle_t *spk,
      * 服务自身保持 IDLE——不 open、不写、不 close，归还前绝不碰这两个句柄。 */
     s_ext_mode = AUDIO_EXT_EXCLUSIVE;
     *spk = spk_codec_dev;
-#if BSP_CAPS_AUDIO_MIC
+#if BOARD_HAS_AUDIO_MIC
     if (mic) {
         *mic = mic_codec_dev;
     }

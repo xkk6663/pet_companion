@@ -22,7 +22,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "bsp/esp-bsp.h"
 #include "lvgl.h"
 
 #include "tab_record.h"

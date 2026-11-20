@@ -11,7 +11,7 @@
  */
 
 #include "esp_log.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #include "page_main.h"
@@ -24,7 +24,11 @@
 #include "tab_files.h"
 #include "tab_music.h"
 #include "overlay_wallpaper.h"
+#include "overlay_manager.h"
+#include "overlay_wp_particles.h"
+#include "page_splash.h"
 #include "pet_overlay.h"
+#include "middleware/periph/button_service.h"
 
 static const char *TAG = "PAGE_MAIN";
 
@@ -35,6 +39,51 @@ static uint32_t   s_tab_files_idx = 2;  /* FILES 页下标（S4 文件管理，�
 static uint32_t   s_tab_music_idx = 3;  /* MUSIC 页下标（本地播放 / 蓝牙推流） */
 static uint32_t   s_tab_rec_idx = 4;    /* REC 页下标（录音 + 双麦可视化） */
 static lv_group_t *s_group_sys;
+
+/* ★★ 2026-11-20 屏保（SET 长按 ≥3 s）：
+ *   · 屏保本体 = **原来的粒子 splash 页**（壁纸 + 漂浮粒子 + 上滑退出提示），
+ *     上电不再自动进，只由长按 SET 按需拉起。
+ *   · 下拉浮层（overlay_wallpaper：壁纸+时钟/天气）是**另一套东西**，只走下拉手势，
+ *     两者互不替代、互不借用。
+ *   · 按键回调跑在 iot_button 任务上下文 ⇒ 只置 volatile 标志，绝不碰 LVGL；
+ *     真正的装/卸页动作在 100 ms lv_timer 里执行（LVGL 线程，本工程铁律）。 */
+static volatile bool s_saver_req;
+static lv_timer_t   *s_saver_timer;
+
+/* iot_button 任务上下文：只打标记 */
+static void set_long_press_cb(void)
+{
+    s_saver_req = true;
+}
+
+/* splash 上滑 → 退出屏保（splash 现在只作为屏保存在，退出统一走 Back） */
+static void screensaver_exit_cb(void)
+{
+    PageManager_Back();
+}
+
+/* LVGL 线程：长按 SET 切换屏保（开着就收起，关着就拉起） */
+static void saver_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_saver_req) {
+        return;
+    }
+    s_saver_req = false;
+
+    if (PageManager_GetCurrent() == &Page_Splash) {
+        PageManager_Back();
+        ESP_LOGI(TAG, "screensaver off (SET long-press)");
+        return;
+    }
+    /* 浮层在 lv_layer_top 上、盖在**所有** screen 之上：桌宠或下拉壁纸正开着就先收掉，
+     * 不然屏保会被压在下面看不见。 */
+    if (overlay_any_active()) {
+        overlay_close(overlay_get_active());
+    }
+    PageManager_Load(&Page_Splash);
+    ESP_LOGI(TAG, "screensaver on (SET long-press)");
+}
 
 /* ★★ tab 绑定的后台动作（取景流 / 文件管理页 / 本地播放页）都写在这里。
  *   ★ 必须放在 refresh_group() **之前**：那个函数在没有 encoder 输入设备的
@@ -68,7 +117,7 @@ static lv_obj_t *main_create(lv_obj_t *parent)
 
     s_tabview = lv_tabview_create(page);
     lv_tabview_set_tab_bar_size(s_tabview, 48);
-    lv_obj_set_size(s_tabview, BSP_LCD_H_RES, BSP_LCD_V_RES);
+    lv_obj_set_size(s_tabview, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     lv_obj_align(s_tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_text_font(s_tabview, UI_FONT, 0);
     lv_obj_set_style_bg_color(s_tabview, COL_BG, 0);
@@ -117,7 +166,7 @@ static lv_obj_t *main_create(lv_obj_t *parent)
     }
 
     /* Encoder groups (only created when an encoder indev exists) */
-    lv_indev_t *indev = bsp_display_get_input_dev();
+    lv_indev_t *indev = disp_input_dev();
     if (indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER) {
         s_group_sys = lv_group_create();
         lv_group_add_obj(s_group_sys, s_tab_btns);
@@ -137,6 +186,14 @@ static lv_obj_t *main_create(lv_obj_t *parent)
     /* S6：AI 浮窗（lv_layer_top）+ SET/MODE 硬件键绑定。 */
     pet_overlay_init();
 
+    /* ★ 屏保入口：SET 长按 ≥3 s 拉起**粒子 splash 页**（不是下拉的壁纸+时钟浮层）。 */
+    page_splash_set_enter_cb(screensaver_exit_cb);
+    /* 粒子层 1.15 MB canvas 缓冲在开机内存宽裕时一次拿稳（之后每次开屏保复用，
+     * 不再反复 malloc/free —— 既不碎片化，也不会"第一次长按打不开"）。 */
+    overlay_wp_particles_prealloc();
+    button_service_set_set_long_cb(set_long_press_cb);
+    s_saver_timer = lv_timer_create(saver_tick_cb, 100, NULL);
+
     ESP_LOGI(TAG, "main page created");
     return page;
 }
@@ -152,6 +209,15 @@ static void main_destroy(lv_obj_t *page)
     pet_overlay_deinit();
     overlay_wallpaper_deinit();
 
+    /* 屏保：先摘掉按键通道与定时器，再拆页面（避免回调里引用已销毁对象）。 */
+    page_splash_set_enter_cb(NULL);
+    button_service_set_set_long_cb(NULL);
+    s_saver_req = false;
+    if (s_saver_timer) {
+        lv_timer_del(s_saver_timer);
+        s_saver_timer = NULL;
+    }
+
     if (s_group_sys) {
         lv_group_del(s_group_sys);
         s_group_sys = NULL;
@@ -164,7 +230,7 @@ static void main_destroy(lv_obj_t *page)
 
 void page_main_refresh_group(void)
 {
-    lv_indev_t *indev = bsp_display_get_input_dev();
+    lv_indev_t *indev = disp_input_dev();
     if (indev && s_group_sys && s_tabview) {
         uint16_t tab = lv_tabview_get_tab_act(s_tabview);
         lv_group_set_editing(s_group_sys, false);

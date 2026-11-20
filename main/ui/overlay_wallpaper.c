@@ -13,7 +13,7 @@
 #include <time.h>
 
 #include "esp_log.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #include "overlay_wallpaper.h"
@@ -147,7 +147,7 @@ static void wallpaper_rotate_check(void)
 static lv_obj_t *wallpaper_layer_build(lv_obj_t *parent)
 {
     lv_obj_t *layer = lv_obj_create(parent);
-    lv_obj_set_size(layer, BSP_LCD_H_RES, BSP_LCD_V_RES);
+    lv_obj_set_size(layer, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     lv_obj_set_style_bg_color(layer, COL_BG, 0);
     lv_obj_set_style_border_width(layer, 0, 0);
     lv_obj_set_style_radius(layer, 0, 0);
@@ -161,7 +161,7 @@ static lv_obj_t *wallpaper_layer_build(lv_obj_t *parent)
             continue;
         }
         lv_obj_t *cv = lv_canvas_create(layer);
-        lv_canvas_set_buffer(cv, buf, BSP_LCD_H_RES, BSP_LCD_V_RES,
+        lv_canvas_set_buffer(cv, buf, BOARD_LCD_H_RES, BOARD_LCD_V_RES,
                              LV_COLOR_FORMAT_RGB888);
         lv_obj_center(cv);
         s_wp_cv[i] = cv;
@@ -185,7 +185,7 @@ static lv_obj_t *wallpaper_layer_build(lv_obj_t *parent)
     s_wp_fading = false;
     s_wp_fading_cv = NULL;
     ESP_LOGI(TAG, "wallpaper %dx%d decoded (cur=buf%d, gen=%u)",
-             (int)BSP_LCD_H_RES, (int)BSP_LCD_V_RES, cur,
+             (int)BOARD_LCD_H_RES, (int)BOARD_LCD_V_RES, cur,
              (unsigned)s_wp_gen_seen);
     return layer;
 }
@@ -492,7 +492,7 @@ static void main_pressing_cb(lv_event_t *e)
     lv_indev_get_point(indev, &p);
     int32_t dy = p.y - s_pull_start_y;
     if (dy > 0) {
-        int32_t y = -BSP_LCD_V_RES + dy;
+        int32_t y = -BOARD_LCD_V_RES + dy;
         if (y > 0) y = 0;
         lv_obj_set_y(s_wallpaper, y);
     }
@@ -506,10 +506,10 @@ static void main_released_cb(lv_event_t *e)
         return;
     }
     int32_t y = lv_obj_get_y(s_wallpaper);
-    if (y > -BSP_LCD_V_RES + PULL_DOWN_OPEN) {
+    if (y > -BOARD_LCD_V_RES + PULL_DOWN_OPEN) {
             overlay_open(OVERLAY_WALLPAPER);
     } else {
-        wallpaper_animate_to(s_wallpaper, -BSP_LCD_V_RES);
+        wallpaper_animate_to(s_wallpaper, -BOARD_LCD_V_RES);
     }
     s_pull_armed = false;
 }
@@ -537,7 +537,7 @@ static void wp_pressing_cb(lv_event_t *e)
     int32_t dy = p.y - s_pull_start_y;
     if (dy < 0) {
         int32_t y = dy;
-        if (y < -BSP_LCD_V_RES) y = -BSP_LCD_V_RES;
+        if (y < -BOARD_LCD_V_RES) y = -BOARD_LCD_V_RES;
         lv_obj_set_y(s_wallpaper, y);
     }
 }
@@ -564,7 +564,7 @@ void overlay_wallpaper_init(lv_obj_t *tab_btns)
 
     s_wallpaper = wallpaper_layer_build(lv_layer_top());
     clock_widget_create(s_wallpaper);
-    lv_obj_set_y(s_wallpaper, -BSP_LCD_V_RES);
+    lv_obj_set_y(s_wallpaper, -BOARD_LCD_V_RES);
     lv_obj_set_clickable(s_wallpaper, true);
     lv_obj_add_event_cb(s_wallpaper, wp_pressed_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_wallpaper, wp_pressing_cb, LV_EVENT_PRESSING, NULL);
@@ -634,6 +634,6 @@ void overlay_wallpaper_show(void)
 void overlay_wallpaper_hide(void)
 {
     if (s_wallpaper) {
-        wallpaper_animate_to(s_wallpaper, -BSP_LCD_V_RES);
+        wallpaper_animate_to(s_wallpaper, -BOARD_LCD_V_RES);
     }
 }

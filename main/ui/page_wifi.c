@@ -17,7 +17,7 @@
 #include <stdlib.h>
 
 #include "lvgl.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 
 #include "page_wifi.h"
 #include "ui_theme.h"
@@ -142,7 +142,7 @@ static void refresh_ap_list(void)
     int n = wifi_manager_get_scan_results(buf, 16);
     for (int i = 0; i < n; i++) {
         lv_obj_t *btn = lv_button_create(s_ap_list);
-        lv_obj_set_size(btn, BSP_LCD_H_RES - 80, 44);
+        lv_obj_set_size(btn, BOARD_LCD_H_RES - 80, 44);
         lv_obj_set_style_bg_color(btn, COL_CARD, 0);
         lv_obj_set_style_bg_color(btn, COL_BORDER, LV_STATE_PRESSED);
         lv_obj_set_style_radius(btn, 10, 0);
@@ -273,7 +273,7 @@ static lv_obj_t *wifi_create(lv_obj_t *parent)
 
     /* wifi master switch */
     s_power_btn = lv_button_create(page);
-    lv_obj_set_size(s_power_btn, BSP_LCD_H_RES - 80, 40);
+    lv_obj_set_size(s_power_btn, BOARD_LCD_H_RES - 80, 40);
     lv_obj_set_style_radius(s_power_btn, 10, 0);
     s_power_lab = lv_label_create(s_power_btn);
     lv_obj_center(s_power_lab);
@@ -293,7 +293,7 @@ static lv_obj_t *wifi_create(lv_obj_t *parent)
 
     /* start / scan button */
     s_start_btn = lv_button_create(page);
-    lv_obj_set_size(s_start_btn, BSP_LCD_H_RES - 80, 44);
+    lv_obj_set_size(s_start_btn, BOARD_LCD_H_RES - 80, 44);
     lv_obj_set_style_bg_color(s_start_btn, COL_CYAN, 0);
     lv_obj_set_style_radius(s_start_btn, 10, 0);
     lv_obj_t *sl = lv_label_create(s_start_btn);
@@ -304,7 +304,7 @@ static lv_obj_t *wifi_create(lv_obj_t *parent)
 
     /* AP list (scrollable, flexible) */
     s_ap_list = lv_obj_create(page);
-    lv_obj_set_size(s_ap_list, BSP_LCD_H_RES - 80, 140);
+    lv_obj_set_size(s_ap_list, BOARD_LCD_H_RES - 80, 140);
     lv_obj_set_style_bg_color(s_ap_list, COL_DARK, 0);
     lv_obj_set_style_border_color(s_ap_list, COL_BORDER, 0);
     lv_obj_set_style_border_width(s_ap_list, 1, 0);
@@ -315,7 +315,7 @@ static lv_obj_t *wifi_create(lv_obj_t *parent)
     /* connect sub-view: ssid header + textarea + keyboard + connect button
      * (hidden until an AP is picked; then shown full-page over the list) */
     s_pwd_row = lv_obj_create(page);
-    lv_obj_set_size(s_pwd_row, BSP_LCD_H_RES - 80, 340);
+    lv_obj_set_size(s_pwd_row, BOARD_LCD_H_RES - 80, 340);
     lv_obj_set_style_bg_color(s_pwd_row, COL_CARD, 0);
     lv_obj_set_style_border_color(s_pwd_row, COL_BORDER, 0);
     lv_obj_set_style_border_width(s_pwd_row, 1, 0);
@@ -328,7 +328,7 @@ static lv_obj_t *wifi_create(lv_obj_t *parent)
 
     /* header: target SSID + cancel */
     lv_obj_t *hdr = lv_obj_create(s_pwd_row);
-    lv_obj_set_size(hdr, BSP_LCD_H_RES - 110, 32);
+    lv_obj_set_size(hdr, BOARD_LCD_H_RES - 110, 32);
     lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(hdr, 0, 0);
     lv_obj_set_style_pad_all(hdr, 0, 0);
@@ -351,16 +351,16 @@ static lv_obj_t *wifi_create(lv_obj_t *parent)
     lv_obj_add_event_cb(s_cancel_btn, cancel_btn_cb, LV_EVENT_CLICKED, NULL);
 
     s_pwd_ta = lv_textarea_create(s_pwd_row);
-    lv_obj_set_size(s_pwd_ta, BSP_LCD_H_RES - 110, 36);
+    lv_obj_set_size(s_pwd_ta, BOARD_LCD_H_RES - 110, 36);
     lv_textarea_set_placeholder_text(s_pwd_ta, "Password");
     lv_obj_add_event_cb(s_pwd_ta, ta_ready_cb, LV_EVENT_READY, NULL);
     /* password visible (no mask) */
 
     s_kb = lv_keyboard_create(s_pwd_row);
-    lv_obj_set_size(s_kb, BSP_LCD_H_RES - 110, 200);
+    lv_obj_set_size(s_kb, BOARD_LCD_H_RES - 110, 200);
 
     s_connect_btn = lv_button_create(s_pwd_row);
-    lv_obj_set_size(s_connect_btn, BSP_LCD_H_RES - 110, 38);
+    lv_obj_set_size(s_connect_btn, BOARD_LCD_H_RES - 110, 38);
     lv_obj_set_style_bg_color(s_connect_btn, COL_GREEN, 0);
     lv_obj_set_style_radius(s_connect_btn, 8, 0);
     lv_obj_t *cl = lv_label_create(s_connect_btn);

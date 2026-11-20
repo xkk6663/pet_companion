@@ -67,7 +67,7 @@
 #include <stdlib.h>             /* qsort */
 #include <string.h>
 
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -99,7 +99,7 @@ LV_FONT_DECLARE(lv_font_cn_20);
 /* ★ 行宽必须比列表的**内容区**窄：列表 760 宽、pad_all 6 ⇒ 内容区 748，
  *   再留 8 px 给竖向滚动条 ⇒ 740。（10 行时必然出滚动条 —— 算错了就是
  *   DEL 按钮被推出可视区，而这属于"看得见按钮、点不到右半边"的隐性故障。） */
-#define FACE_ROW_W      (BSP_LCD_H_RES - 40 - 12 - 8)
+#define FACE_ROW_W      (BOARD_LCD_H_RES - 40 - 12 - 8)
 #define FACE_LIST_H     250     /* ★ S8-4：从 300 降到 250，给底部页码行腾地方 */
 #define BOTTOM_H        36
 
@@ -1143,7 +1143,7 @@ static lv_obj_t *face_create(lv_obj_t *parent)
 
     /* ---- 第一行：状态文本（左） + RETRY + 视图切换（右） ---- */
     lv_obj_t *hdr = lv_obj_create(page);
-    lv_obj_set_size(hdr, BSP_LCD_H_RES - 40, 48);
+    lv_obj_set_size(hdr, BOARD_LCD_H_RES - 40, 48);
     lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(hdr, 0, 0);
     lv_obj_set_style_pad_all(hdr, 0, 0);
@@ -1182,7 +1182,7 @@ static lv_obj_t *face_create(lv_obj_t *parent)
 
     /* ---- 第二行：BY DATE/BY PERSON + CLEAR（仅 RECORDS 可见） ---- */
     s_bar2 = lv_obj_create(page);
-    lv_obj_set_size(s_bar2, BSP_LCD_H_RES - 40, 48);
+    lv_obj_set_size(s_bar2, BOARD_LCD_H_RES - 40, 48);
     lv_obj_set_style_bg_opa(s_bar2, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_bar2, 0, 0);
     lv_obj_set_style_pad_all(s_bar2, 0, 0);
@@ -1228,7 +1228,7 @@ static lv_obj_t *face_create(lv_obj_t *parent)
 
     /* ---- 列表（两种视图共用） ---- */
     s_list = lv_obj_create(page);
-    lv_obj_set_size(s_list, BSP_LCD_H_RES - 40, FACE_LIST_H);
+    lv_obj_set_size(s_list, BOARD_LCD_H_RES - 40, FACE_LIST_H);
     lv_obj_set_style_bg_color(s_list, COL_DARK, 0);
     lv_obj_set_style_border_color(s_list, COL_BORDER, 0);
     lv_obj_set_style_border_width(s_list, 1, 0);
@@ -1239,7 +1239,7 @@ static lv_obj_t *face_create(lv_obj_t *parent)
 
     /* ---- 底行：提示文本（左，占满剩余宽度） + 页码（右，仅 RECORDS） ---- */
     lv_obj_t *bot = lv_obj_create(page);
-    lv_obj_set_size(bot, BSP_LCD_H_RES - 40, BOTTOM_H);
+    lv_obj_set_size(bot, BOARD_LCD_H_RES - 40, BOTTOM_H);
     lv_obj_set_style_bg_opa(bot, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bot, 0, 0);
     lv_obj_set_style_pad_all(bot, 0, 0);
@@ -1295,7 +1295,7 @@ static lv_obj_t *face_create(lv_obj_t *parent)
 
     /* ---- 预览覆盖层（全屏，平时 HIDDEN） ---- */
     s_pv_ov = lv_obj_create(page);
-    lv_obj_set_size(s_pv_ov, BSP_LCD_H_RES, BSP_LCD_V_RES);
+    lv_obj_set_size(s_pv_ov, BOARD_LCD_H_RES, BOARD_LCD_V_RES);
     lv_obj_set_style_bg_color(s_pv_ov, COL_DARK, 0);
     lv_obj_set_style_bg_opa(s_pv_ov, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_pv_ov, 0, 0);
@@ -1309,7 +1309,7 @@ static lv_obj_t *face_create(lv_obj_t *parent)
 
     /* 说明行容器（透明、不参与布局 —— 覆盖层里所有东西都绝对定位） */
     lv_obj_t *caprow = lv_obj_create(s_pv_ov);
-    lv_obj_set_size(caprow, BSP_LCD_H_RES - 140 - 32 - 12, 44);
+    lv_obj_set_size(caprow, BOARD_LCD_H_RES - 140 - 32 - 12, 44);
     lv_obj_set_style_bg_opa(caprow, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(caprow, 0, 0);
     lv_obj_set_style_pad_all(caprow, 0, 0);
@@ -1336,7 +1336,7 @@ static lv_obj_t *face_create(lv_obj_t *parent)
     lv_obj_set_style_radius(pclose, 8, 0);
     lv_obj_set_style_bg_color(pclose, COL_CYAN, 0);
     lv_obj_add_event_cb(pclose, prev_close_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_set_pos(pclose, BSP_LCD_H_RES - 140 - 16, 14);
+    lv_obj_set_pos(pclose, BOARD_LCD_H_RES - 140 - 16, 14);
     lv_obj_t *cl = lv_label_create(pclose);
     lv_label_set_text_static(cl, LV_SYMBOL_CLOSE "  CLOSE");
     lv_obj_set_style_text_color(cl, COL_DARK, 0);
@@ -1348,13 +1348,13 @@ static lv_obj_t *face_create(lv_obj_t *parent)
      *   而覆盖层可能先于解码结果被显示出来 ⇒ 没有这块占位就是一次空指针解引用。 */
     s_pv_canvas = lv_canvas_create(s_pv_ov);
     lv_canvas_set_buffer(s_pv_canvas, &s_pv_dummy, 1, 1, LV_COLOR_FORMAT_RGB565);
-    lv_obj_set_pos(s_pv_canvas, (BSP_LCD_H_RES - (int)FM_W) / 2, 70);
+    lv_obj_set_pos(s_pv_canvas, (BOARD_LCD_H_RES - (int)FM_W) / 2, 70);
 
     s_pv_stat = lv_label_create(s_pv_ov);
     lv_label_set_text_static(s_pv_stat, "");
     lv_obj_set_style_text_color(s_pv_stat, COL_SUBTEXT, 0);
     lv_obj_set_style_text_font(s_pv_stat, UI_FONT, 0);
-    lv_obj_set_pos(s_pv_stat, 80, BSP_LCD_V_RES - 40);
+    lv_obj_set_pos(s_pv_stat, 80, BOARD_LCD_V_RES - 40);
 
     lv_obj_set_hidden(s_pv_ov, true);
 

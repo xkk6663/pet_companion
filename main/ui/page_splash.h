@@ -6,8 +6,8 @@
 
 /**
  * @file page_splash.h
- * @brief Boot splash page (stack root). Fullscreen wallpaper, swipe up to
- *        enter the main UI via the registered enter callback.
+ * @brief 屏保页（原开机 splash）。上电不再自动装载，由 SET 长按 ≥3 s 按需
+ *        压栈拉起；上滑触发 enter 回调（page_main 里绑成 PageManager_Back）。
  */
 
 #pragma once

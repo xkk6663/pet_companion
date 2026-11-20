@@ -31,8 +31,29 @@
 extern "C" {
 #endif
 
+/** 静默窗口的"让出者"回调表（定义见 .c 顶部注释；接线在 app/main.c）。 */
+typedef struct {
+    const char *name;      /* 日志用，如 "recording" / "viewfinder" / "music" */
+    bool (*busy)(void);    /* 可空：true = 现在绝不能写 flash */
+    bool (*calm)(void);    /* 可空：让出资源，true = 本次动过（end 要 restore） */
+    void (*restore)(void); /* 可空：与 calm 成对 */
+} flash_guard_client_t;
+
 /** 初始化互斥锁（幂等；main 在 wifi 启动前调一次）。 */
 void flash_guard_init(void);
+
+/**
+ * @brief 登记一个"让出者"（★ P2：本模块不再认识任何具体业务模块）
+ *
+ * 语义由回调表达，接线在 app/main.c（组合根）做：
+ *   · busy()    true = 此刻绝对不能写 flash（如录像中/收尾中）⇒ begin 直接拒绝；
+ *   · calm()    true = 本项这次确实让出了资源（停取景/暂停播放）⇒ end 会 restore；
+ *   · restore() 反向恢复，与 calm 成对。
+ *
+ * @param client 静态生命周期（调用方保证常驻），最多 4 个。
+ * @return ESP_OK / ESP_ERR_INVALID_ARG / ESP_ERR_NO_MEM（表满）
+ */
+esp_err_t flash_guard_register(const flash_guard_client_t *client);
 
 /**
  * @brief 打开静默窗口。

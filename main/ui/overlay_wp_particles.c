@@ -12,7 +12,7 @@
 #include <string.h>
 #include "esp_log.h"
 #include "esp_heap_caps.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #include "overlay_wp_particles.h"
@@ -141,17 +141,42 @@ static void tick_cb(lv_timer_t *t)
     lv_obj_invalidate(s_canvas);
 }
 
+/* ★ 2026-11-20：splash 从"常驻根页"改成"按需拉起的屏保页"后的缓冲策略。
+ *   旧版 build 只跑一次、缓冲永不归还，所以 malloc 一次没事；现在会反复开关，
+ *   若每次 build 都 malloc 就是每开一次漏 1.15 MB，若在 destroy 里 free 又会和
+ *   "延迟销毁的上一页 + 刚重建的新页"抢同一块 PSRAM。
+ *   ⇒ 缓冲改成**进程内唯一、开机预分配、每次打开复用**：不泄漏、不碎片化，
+ *     也保证第一次长按 SET 就能把屏保拉起来（不靠运行期临时抢 1.15 MB）。 */
+void overlay_wp_particles_prealloc(void)
+{
+    if (s_buf) {
+        return;
+    }
+    s_w = BOARD_LCD_H_RES;
+    s_h = BOARD_LCD_V_RES;
+    s_pixels = (size_t)s_w * s_h;
+    s_buf = heap_caps_malloc(s_pixels * 3, MALLOC_CAP_SPIRAM);
+    if (s_buf) {
+        ESP_LOGI(TAG, "canvas buf preallocated (%u B)", (unsigned)(s_pixels * 3));
+    } else {
+        ESP_LOGE(TAG, "canvas buf prealloc failed (%u B)", (unsigned)(s_pixels * 3));
+    }
+}
+
 lv_obj_t *overlay_wp_particles_build(lv_obj_t *parent)
 {
-    s_w = BSP_LCD_H_RES;
-    s_h = BSP_LCD_V_RES;
+    s_w = BOARD_LCD_H_RES;
+    s_h = BOARD_LCD_V_RES;
     s_pixels = (size_t)s_w * s_h;
     size_t buflen = s_pixels * 3;
 
-    s_buf  = heap_caps_malloc(buflen, MALLOC_CAP_SPIRAM);
     if (!s_buf) {
-        ESP_LOGE(TAG, "psram alloc fail");
-        return NULL;
+        /* 预分配没成功（或没走 prealloc 的调用路径）：这里兜底再抢一次。 */
+        s_buf = heap_caps_malloc(buflen, MALLOC_CAP_SPIRAM);
+        if (!s_buf) {
+            ESP_LOGE(TAG, "psram alloc fail");
+            return NULL;
+        }
     }
 
     /* §75：底图借用 wallpaper_service 当前 buffer（开机时 service 已同步解码
@@ -187,4 +212,6 @@ void overlay_wp_particles_stop(void)
         ESP_LOGI(TAG, "particles timer stopped");
         lv_timer_del(s_timer); s_timer = NULL;
     }
+    /* canvas 对象随 splash 页一起删除，这里只清悬垂句柄（缓冲仍留着复用）。 */
+    s_canvas = NULL;
 }

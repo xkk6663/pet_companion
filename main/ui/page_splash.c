@@ -6,11 +6,15 @@
 
 /**
  * @file page_splash.c
- * @brief Boot splash page, refactored from the former ui_splash.c.
+ * @brief 屏保页（原开机 splash，2026-11-20 起改为按需拉起）。
+ *
+ *   上电不再装载本页；唯一入口是主页里 **SET 长按 ≥3 s**（见 page_main.c），
+ *   唯一出口是 **上滑**（本页回调）或再次长按 SET（page_main 调 PageManager_Back）。
+ *   视觉不变：壁纸 + 漂浮粒子 + 底部提示。下拉浮层（壁纸+时钟）是另一套，别混。
  */
 
 #include "esp_log.h"
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #include "page_splash.h"
@@ -56,14 +60,14 @@ static void splash_pressing_cb(lv_event_t *e)
     if (s_hint) {
         int32_t move = dy / 4;
         if (move < 0) {
-            lv_obj_set_y(s_hint, BSP_LCD_V_RES - 90 + move);
+            lv_obj_set_y(s_hint, BOARD_LCD_V_RES - 90 + move);
         }
     }
 
     if (dy < SWIPE_UP_DY) {
         s_entered = true;
         overlay_wp_particles_stop();
-        ESP_LOGI(TAG, "swipe up detected, entering main UI");
+        ESP_LOGI(TAG, "swipe up detected, leaving screensaver");
         if (s_enter_cb) {
             s_enter_cb();
         }
@@ -84,7 +88,7 @@ static lv_obj_t *splash_create(lv_obj_t *parent)
     }
 
     s_hint = lv_label_create(page);
-    lv_label_set_text(s_hint, LV_SYMBOL_UP"  SWIPE UP TO ENTER");
+    lv_label_set_text(s_hint, LV_SYMBOL_UP"  SWIPE UP TO EXIT");
     lv_obj_set_style_text_color(s_hint, COL_CYAN, 0);
     lv_obj_set_style_text_font(s_hint, UI_FONT, 0);
     lv_obj_set_style_text_letter_space(s_hint, 2, 0);

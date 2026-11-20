@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "bsp/esp-bsp.h"
+#include "platform/port_display.h"
 #include "lvgl.h"
 
 #include "tab_sys_entry.h"
@@ -126,7 +126,7 @@ void tab_sys_entry_build(lv_obj_t *screen, lv_group_t *group)
      *   ⚠ 再加第 6 行必须先减 56+8：可行的手段只有缩本卡（52→40 以下不可读）
      *     或把 pad_row 压到 4，别只顾着加 ui_common_setting_row。 */
     lv_obj_t *vol = lv_obj_create(screen);
-    lv_obj_set_size(vol, BSP_LCD_H_RES - 40, 52);
+    lv_obj_set_size(vol, BOARD_LCD_H_RES - 40, 52);
     lv_obj_set_style_bg_color(vol, COL_CARD, 0);
     lv_obj_set_style_border_color(vol, COL_BORDER, 0);
     lv_obj_set_style_border_width(vol, 1, 0);
@@ -141,7 +141,7 @@ void tab_sys_entry_build(lv_obj_t *screen, lv_group_t *group)
     lv_obj_set_style_text_color(l, COL_TEXT, 0);
 
     s_vol_slider = lv_slider_create(vol);
-    lv_obj_set_width(s_vol_slider, BSP_LCD_H_RES - 220);
+    lv_obj_set_width(s_vol_slider, BOARD_LCD_H_RES - 220);
     lv_slider_set_range(s_vol_slider, 0, 90);
     lv_slider_set_value(s_vol_slider, button_service_get_volume(), false);
     lv_obj_set_style_bg_color(s_vol_slider, COL_BORDER, 0);

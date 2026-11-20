@@ -53,7 +53,8 @@
 #include "led_strip.h"
 
 #include "breath_sync.h"
-#include "middleware/net/net_time_service.h"
+#include "platform/board_map.h"
+#include "platform/port_time.h"
 
 static const char *TAG = "LED_SVC";
 
@@ -178,7 +179,7 @@ static void feed_utc_if_ready(int64_t mono_us)
     }
     s_last_feed_mono_us = mono_us;
 
-    if (!net_time_service_time_valid()) {
+    if (!port_time_valid()) {
         return;                     /* 还没校过时：保持自由运行（半亮） */
     }
 
@@ -334,7 +335,7 @@ void led_service_init(void)
 
     /* 纯驱动：WS2812 / GPIO37 / RMT 10 MHz，参数与 BSP 原配置一致 */
     const led_strip_config_t strip_cfg = {
-        .strip_gpio_num = BSP_LED_RGB_IO,
+        .strip_gpio_num = BOARD_LED_RGB_GPIO,
         .max_leds = 1,
         .led_model = LED_MODEL_WS2812,
         /* 显式写明 GRB：WS2812 的物理顺序是 G-R-B，不写会落到默认值，
