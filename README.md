@@ -31,27 +31,10 @@
 
 ## 1. 系统全景
 
-```
-┌─ 云端 · 智力 ───────────────────────────────────────────────────────────────┐
-│  L4 内容   music_proxy :8080（网易云 + 2 兜底源）· alist :5244              │
-│  L3 智力   LLM deepseek-flash · ASR SenseVoiceSmall · TTS qwen-audio-3.1    │
-│            VL 多模态看图 · embedding 记忆检索                               │
-│  L2 编排   AstrBot v4.29.1（人格「大肥鱼」+ 插件体系）                       │
-│  L1 接入   pet-gateway :8081（唯一入口 / 工具中继 / 媒体归一化）             │
-└──────────────────────────────▲──────────────────────────────────────────────┘
-                               │  一条 WebSocket 长连接（设备主动外连）
-                   上行 text/pcm/caps/action_result/barge_in
-                   下行 text/emotion/audio/image/action/system/error
-┌──────────────────────────────┴──────────────────────────────────────────────┐
-│  L5 表达   LVGL 桌宠浮窗 · 6 个 tab（CAM/VIDEO/FILES/MUSIC/REC/SYS）        │
-│  L4 会话   xiaozhi_service：状态机 + codec 租借 + 双播放通道（TTS 抢占）     
-│  L3 执行   ai_action + 6 个业务模块：15 个 MCP 工具 + 1 个纯本地动作         
-│  L2 解码   event_bus：7 种下行帧分发（收包线程只入队，绝不阻塞）            │
-│  L1 传输   ws_client：单连接 + 1s→30s 指数退避 + 按 JSON 括号切帧            
-│  L0 平台   platform/ 端口层：board_map + port_display/storage/time/bus       
-│  身体      ESP32-S31 RISC-V @240MHz · 16MB Flash + 8MB PSRAM · 800×480 屏    
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+![系统全景：云端四层能力栈 + 设备六层栈，中间只隔一条设备主动外连的 WebSocket](docs/assets/svg/system-overview.svg)
+
+> 上面是**智力**：云端四层能力栈 + 一个网关；下面是**身体**：设备 L0~L5 六层栈。
+> 中间那条 WS 就是全部的连接 —— 矢量图源在 `docs/assets/svg/`，改图不必改文档正文。
 
 一句话概括分工：**设备负责"在场"，云端负责"理解"**。设备端**不跑任何大模型**（连 ASR 都不跑），
 唯一例外是人脸检测/识别两个小模型 —— 那是隐私、时延、离线可用性三者共同逼出来的。
@@ -210,21 +193,7 @@ python tools/layering/layer_guard.py --baseline tools/layering/layering_baseline
 
 ### 4.1 接入拓扑
 
-```
-        ┌──────────────────────── 云服务器 ────────────────────────┐
-        │  AstrBot 容器 :6185  ← /api/v1/chat (SSE, Bearer abk)     │
-        │      ▲                         ▲                          │
-        │      │ provider 配置直读        │ 插件 POST /action /push   │
-        │  pet-gateway :8081 ─────────────┘                          │
-        │      ▲  GET /media、/static（图片 / TTS 音频）              │
-        └──────┼──────────────────────────────────────────────────────┘
-               │  WS /ws/xz-s31-<MAC末4位>
-               │  ↑ text / pcm / caps / action_result / barge_in
-               │  ↓ text / emotion / audio / image / action / system / error
-        ┌──────┴────── ESP32-S31 ────────┐
-        │  ws_client → event_bus → ai_action → 硬件   │
-        └────────────────────────────────┘
-```
+![接入拓扑：设备 → pet-gateway → AstrBot](docs/assets/svg/gateway-topology.svg)
 
 三段职责各一句：
 
@@ -303,29 +272,7 @@ AstrBot 插件 `astrbot_plugin_pet_device` 每 **45 s** 拉一次 `GET /caps`：
 
 ### 4.4 一次语音点歌的完整时序
 
-```
-用户按键说"放首晴天"
-  │
-  ├─ 设备  PTT 录音 → PCM 16k → base64 → ws 上行
-  │                                         └─▶ 网关
-  │                                              ① 立即下行 emotion:thinking
-  │                                                 （ASR+LLM 要 9~18 s，不能静默）
-  │                                              ② PCM 封 WAV → SenseVoice → 文本
-  │                                              ③ 回显 text(role=0)
-  │                                              ④ 文本 → AstrBot /api/v1/chat（SSE 增量拼接）
-  │                                                    LLM(deepseek-flash) 决定调 pet_music
-  │                                              ⑤ 插件 POST /action → 网关
-  │  ◀── {"type":"action","id":7,"name":"music","args":{"name":"晴天"}}
-  │  ├─ ai_action：查表 → do_music()
-  │  │     ① 本地曲库命中 → 直接播（离线可用）
-  │  │     ② 未命中 → music_proxy /v1/search → /v1/url → 起播
-  │  │     ③ 成功后异步落盘 /sdcard/music/<歌手>-<歌名>.mp3 + .lrc
-  │  └──▶ {"type":"event","event":"action_result","id":7,"ok":1,"data":"晴天"}
-  │                                              ⑥ 拿到**真实回执**才说话
-  │                                              ⑦ 只回文字、不出 TTS（否则顶掉音乐）
-  ▼
-喇叭出声 + 屏幕显示歌名 + SD 卡多一首歌
-```
+![语音点歌时序：PTT 上行 → 网关 ASR → AstrBot → 插件发 action → 设备执行 → 回执](docs/assets/svg/voice-song-sequence.svg)
 
 两个细节容易被忽略，但都是线上踩出来的：
 
@@ -463,6 +410,7 @@ components/                   esp_bt_audio（A2DP Source + gmf io_bt）
                               esp_littlefs · hand_detect · hand_gesture
 littlefs_content/             烧进 storage 的模型与素材（不进固件）
 docs/                         工程规范 / 开发文档 / 项目规划 / 汇报 / 硬件图
+docs/assets/svg/              10 张架构图（系统全景 / 接入拓扑 / 分层模型 / 时序 / 媒体链路…）
 tools/diag/                   云端网关 ws_gateway.py + 部署 / 联调脚本
 tools/layering/               分层护栏 layer_guard.py + 存量基线（CI 直接调用）
 tools/music_proxy/            点歌音源代理（Docker）
@@ -470,7 +418,7 @@ tools/music_proxy/            点歌音源代理（Docker）
 
 | 规模 | 数值 |
 |---|---|
-| 设备端代码 | **61,375 行 / 171 个 `.c`·`.h`**（业务集中在 `middleware/` + `ui/`；约 2 万行生成字模是 `littlefs_content/` 里的 bin，不在源码里） |
+| 设备端代码 | **70,939 行 / 173 个 `.c`·`.h`·`.cpp`**（`main/` 全量，含 `ui/fonts` 生成的字体 C **20,228 行**；业务代码 50,251 行） |
 | 云端代码 | 1,708 行 Python（网关 + 音源代理） |
 | 分层护栏 | 6 条规则（G1~G6），存量 27 条已登记基线，新增违规 CI 直接失败 |
 
