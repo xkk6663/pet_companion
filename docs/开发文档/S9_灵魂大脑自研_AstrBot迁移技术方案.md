@@ -6,7 +6,7 @@
 
 > 状态：~~调研完成，待立项~~ **已归档**（原状态 2026-10-24）
 > 基线：`端侧人脸识别` 分支 `03f0a57`（ESP-IDF v6.1 / esp_xiaozhi vendor 0.1.1 / av_processor 0.7.0）
-> 方法：源码逐行核对本仓库 + `C:\Users\xiao1\Mao-dsh-pet\docs\SKILL-跨设备接入云端AstrBot.md`（下称「接入方案」）。
+> 方法：源码逐行核对本仓库 + `docs/SKILL-跨设备接入云端AstrBot.md`（本机另一个工程里）（下称「接入方案」）。
 > 所有结论附文件路径 + 行号；标注 **【需核对】** 的条目不来自本仓库源码，落地前必须在真机/真服务器验证。
 
 ---
@@ -126,7 +126,7 @@ Content-Type: application/json
 }
 ```
 
-**UMO** 恒为 `webchat:FriendMessage:webchat!xiao1!xz-s31-a1b2`。
+**UMO** 恒为 `webchat:FriendMessage:webchat!<account>!xz-s31-a1b2`。
 
 ### 3.3 三个必须写进代码的硬约束
 

@@ -27,9 +27,9 @@ __pycache__/
 report/
 
 # Gateway runtime artifacts produced when tests import ws_gateway
-tools/diag/gateway.log
-tools/diag/static/
-tools/diag/uploads/
+cloud/gateway/gateway.log
+cloud/gateway/static/
+cloud/gateway/uploads/
 
 # OS
 .DS_Store
@@ -44,6 +44,13 @@ docs/_*.txt
 # Local secrets: API keys injected at build time (NEVER commit)
 tools/idf_env.local.ps1
 *.local.ps1
+
+# SSH / TLS 私钥与证书（NEVER commit）
+*.pem
+*.key
+*.p12
+*.pfx
+cloud/gateway/config.json
 
 # Local askpass helper (do not commit)
 .askpass.bat

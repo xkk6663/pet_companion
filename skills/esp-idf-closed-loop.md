@@ -1,6 +1,6 @@
 # Skill：ESP-IDF 终端闭环开发 SOP
 
-> 适用工程：`C:\Users\xiao1\Desktop\esp32\display_audio_photo`
+> 适用工程：`<repo>`
 > 硬件：ESP32-S31-Korvo-1 V1.1，烧录端口 COM9
 > ESP-IDF：v6.1.0
 >
@@ -55,7 +55,7 @@ ESP-IDF 不在系统 PATH 里，直接敲 `idf.py` 会报"不是内部或外部�
 
 ```powershell
 . 'C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1'
-Set-Location 'C:\Users\xiao1\Desktop\esp32\display_audio_photo'
+Set-Location '<repo>'
 ```
 
 启动成功后会看到：
@@ -205,7 +205,7 @@ s.close()
 
 ```powershell
 & "C:\Espressif\tools\python\v6.1\venv\Scripts\python.exe" `
-  "C:\Users\xiao1\Desktop\esp32\display_audio_photo\docs\_serial_capture.py"
+  "<repo>\docs\_serial_capture.py"
 ```
 
 > 想改抓多少秒，改脚本里的 `+ 12`。
@@ -235,7 +235,7 @@ python _serial_capture.py
 agent 后台跑时，把 build+flash 串成一条：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". 'C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1'; Set-Location 'C:\Users\xiao1\Desktop\esp32\display_audio_photo'; idf.py -p COM9 flash"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ". 'C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1'; Set-Location '<repo>'; idf.py -p COM9 flash"
 ```
 
 跑完再单独跑 pyserial 脚本。`idf.py flash` 结束时板子会自动复位并启动，pyserial 直接读就能抓到完整启动日志，不需要再拉 RTS。

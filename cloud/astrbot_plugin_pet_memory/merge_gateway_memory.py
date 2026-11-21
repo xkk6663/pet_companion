@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-LOCAL = Path(r"C:\Users\xiao1\Desktop\esp32\pet_companion\tools\diag\ws_gateway.py")
+LOCAL = Path(__file__).resolve().parents[1] / "gateway" / "ws_gateway.py"
 SERVER = Path(sys.argv[1])
 OUT = Path(sys.argv[2])
 

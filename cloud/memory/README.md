@@ -99,8 +99,8 @@ curl -s -X POST http://127.0.0.1:8081/memory/query \
 
 ```bash
 # 项目根目录；Windows 用 venv 的绝对路径
-.venv/Scripts/python.exe tools/memory/selftest_slice.py    # /slice + query + resources
-.venv/Scripts/python.exe tools/memory/selftest_nightly.py  # 夜间轨 + 可复现
+.venv/Scripts/python.exe cloud/memory/selftest_slice.py    # /slice + query + resources
+.venv/Scripts/python.exe cloud/memory/selftest_nightly.py  # 夜间轨 + 可复现
 ```
 
 两个脚本都用临时 `PET_MEMORY_DIR`，不会写真实目录。

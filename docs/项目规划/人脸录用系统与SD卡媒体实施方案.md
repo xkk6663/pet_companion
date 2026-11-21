@@ -21,7 +21,7 @@
 > - ✅ **S8**：punch_service 打卡事务 + page_face 记录页 + CAM 页 MODE/FACE/PUNCH；
 >   最终验收结论见 `S8_人脸识别打卡系统方案.md` §18；
 > - 📋 遗留候选（不阻塞）：file_mgr `s_pv[2]` 按需化、阶段 3.5 fs_http_service。
-> 分支：`端侧人脸识别`｜ 工程根：`C:\Users\xiao1\Desktop\esp32\display_audio_photo`
+> 分支：`端侧人脸识别`｜ 工程根：`<repo>`
 >
 > 本文所有"事实"都带**源码行号或实测值**；凡属推断的，一律标 **⚠ 未实测**。
 > **注意**：§2.5.4 / §4.2 的流程图里"用 `VIDIOC_S_FMT` 切格式""capture_service 自己管 V4L2"
@@ -487,7 +487,7 @@ esp_err_t sdcard_service_mount(void)
 ### 3.3 移植的**具体操作**（不切分支，保护工作区 36 处未提交改动）
 
 ```bash
-cd "C:/Users/xiao1/Desktop/esp32/display_audio_photo"
+cd "<repo>"
 # 从 main 取出两个文件作为"参考素材"（不放工程内，放 .workbuddy/ref/ 只读参考）
 mkdir -p .workbuddy/ref
 git show main:main/middleware/system/sdcard_service.h > .workbuddy/ref/sdcard_service.h.main

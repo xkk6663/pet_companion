@@ -441,7 +441,7 @@ async def send_media(ws: WebSocket, media: list | None) -> None:
     """
     if not media:
         return
-    host = ws.headers.get("host") or f"120.76.230.17:{CONFIG['port']}"
+    host = ws.headers.get("host") or f"127.0.0.1:{CONFIG['port']}"
     for kind, name in media:
         if kind != "image":
             continue
@@ -926,7 +926,7 @@ async def upload_image(session_id: str, request: Request):
 
 # ---------------------------------------------------------------- 记忆：事件切片（S10 P3/P4）
 # 设备端"在线直推"的落点：raw body（audio/wav 或裸 PCM）→ ASR → 追加一行原始事件。
-# ★ 目录可用 PET_MEMORY_DIR 覆盖；不可写时退到 tools/diag/memory（本地自测用）。
+# ★ 目录可用 PET_MEMORY_DIR 覆盖；不可写时退到 gateway 同级的 memory/（本地自测用）。
 MEMORY_DIR = Path(os.environ.get("PET_MEMORY_DIR", "/opt/pet_memory"))
 try:
     (MEMORY_DIR / "raw").mkdir(parents=True, exist_ok=True)

@@ -279,3 +279,18 @@ if(NOT _music_token STREQUAL "")
 else()
     message(STATUS "MUSIC_TOKEN: not set, cloud music disabled")
 endif()
+
+# =============================================================================
+#  网关地址注入（可选）—— 服务器地址同样不进被跟踪源码
+#    $ENV{PET_GATEWAY_URL} → -DPET_GATEWAY_URL_DEFAULT="ws://…"
+#  未注入时：ws_client.c 的 #ifndef 占位为空串，地址只从网页管理端来
+#            （NVS pet_cfg/ws_base）；ws_client_start() 会在没配时直接返回并打一条日志。
+# =============================================================================
+set(_gw_url "$ENV{PET_GATEWAY_URL}")
+if(NOT _gw_url STREQUAL "")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        "PET_GATEWAY_URL_DEFAULT=\"${_gw_url}\"")
+    message(STATUS "PET_GATEWAY_URL: injected (value hidden)")
+else()
+    message(STATUS "PET_GATEWAY_URL: not set, gateway address comes from NVS (web UI)")
+endif()

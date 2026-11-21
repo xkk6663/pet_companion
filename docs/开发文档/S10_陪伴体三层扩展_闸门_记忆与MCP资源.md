@@ -489,7 +489,7 @@ seq, person_id, name, date, time, rel(照片相对路径), score
 |---|---|---|
 | 按天删除 | 删 `raw/YYYYMMDD/` + `audio/YYYYMMDD/` + 重建 derived | 用户说"把昨天删了"要能真删 |
 | 按人删除 | 标记 `person:x` 的事件加 `redact` 注解，派生层重建时剔除 | 家里来客人，不该留下他的画像 |
-| 保留期 | 默认音频 30 天、原始文本 180 天，超期只留统计 | 已由 `tools/memory/retention.py` + `pet-memory-retention.timer` 每天 03:30 执行；可改 env |
+| 保留期 | 默认音频 30 天、原始文本 180 天，超期只留统计 | 已由 `cloud/memory/retention.py` + `pet-memory-retention.timer` 每天 03:30 执行；可改 env |
 | 暂停监听 | 物理按键 / 网页管理端一个开关 → `gate_pause()` | 隐私的第一原则是"能关" |
 | 指示灯 | 监听面活跃时 LED 常亮（`led_service` 已有） | 用户必须"看得见它在听" |
 
@@ -684,10 +684,10 @@ caps 里用**进程内 `resources/list`** 枚举 —— 与工具用 `tools/list
 | **P0 观察（只接回调）** | `recorder_event_cb` 接一个只打日志的函数；不改所有权、不上传、不落盘 | `xiaozhi_service.c`（+1 回调函数 ~10 行，`:933` 赋值） | 0.5 天 | 低 | 串口成对出现 `GATE: vad_start 09:12:03.120` / `GATE: vad_end 4.2s`；PTT、会话、TTS 日志与改动前逐条一致 |
 | **P1 所有权拆分** | recorder 从 session 提到 gate；60 s idle close 改为"还耳朵"；本地录音/MP3 可 `gate_yield()` | 新增 `audio/mic_gate.c/.h`；`xiaozhi_service.c`（`session_prepare/teardown`）；`audio_service.c/.h`；`main.c` | 2~3 天 | **高** | V2/V4/V6 全过；24 h 无 `largest_free_block` 跌破基线 80% |
 | **P2 切片状态机（本地）** | 1 MB PSRAM 环形缓冲、预滚 300 ms、尾部 500 ms、1~30 s 切片、TTS 期抑制；**先不联网** | `mic_gate.c/.h` | 1~2 天 | 中 | V1/V2/V3/V7；日志能对齐"3 句话 = 3 条切片" |
-| **P3 网关 `/slice` + raw 存储** | 新增 raw-body 端点，ASR-only，写 `/opt/pet_memory/raw`，返回 text 与 ACK；幂等 | `tools/diag/ws_gateway.py`；`/opt/pet_memory/` | 1~2 天 | 低 | `curl --data-binary @x.wav` 返回 text；同 id 重传不新增；>4 MB 返回 413 |
+| **P3 网关 `/slice` + raw 存储** | 新增 raw-body 端点，ASR-only，写 `/opt/pet_memory/raw`，返回 text 与 ACK；幂等 | `cloud/gateway/ws_gateway.py`；`/opt/pet_memory/` | 1~2 天 | 低 | `curl --data-binary @x.wav` 返回 text；同 id 重传不新增；>4 MB 返回 413 |
 | **P4 直推接线 + 断网兜底** | 在线 `POST /slice`；失败/断网 >60 s 转 OPUS 溢写 SD；恢复补传、ACK 即删 | 新增 `ai/slice_client.c/.h`；`mic_gate.c` | 1 天 | 中 | V1/V5：在线时 SD 无新增文件；拔网线后出现 `.opus`，恢复后补传并删除 |
-| **P5 夜间抽取** | 断网积压补转写；LLM 抽取人/承诺/话题；统计；`report.json`（只含数字与出处） | 新增 `tools/memory/nightly.py` + systemd timer；SQLite | 2~3 天 | 中 | 同一批数据跑两次，report 数字逐字段一致 |
-| **P6 resources + 查询 + 表达** | 资源注册、caps 扩 `resources`、一条 `pet_memory_query` 工具、`/push` 三模板 | `ai_action.c`（`resources/list` 分支 + caps）、`esp_mcp_add_resource`；网关适配层；`tools/memory/query.py` | 2 天 | 低 | 问"这周欠了谁什么"能给出 `built_from`；无数据时明确说"没有" |
+| **P5 夜间抽取** | 断网积压补转写；LLM 抽取人/承诺/话题；统计；`report.json`（只含数字与出处） | 新增 `cloud/memory/nightly.py` + systemd timer；SQLite | 2~3 天 | 中 | 同一批数据跑两次，report 数字逐字段一致 |
+| **P6 resources + 查询 + 表达** | 资源注册、caps 扩 `resources`、一条 `pet_memory_query` 工具、`/push` 三模板 | `ai_action.c`（`resources/list` 分支 + caps）、`esp_mcp_add_resource`；网关适配层；`cloud/memory/query.py` | 2 天 | 低 | 问"这周欠了谁什么"能给出 `built_from`；无数据时明确说"没有" |
 | **P7 主体画像** | 关系分类、承诺兑现率、活动节律 | 派生层（可重建） | 3 天+ | 中 | 每个结论都能点到原始事件；改规则可重跑，不清数据 |
 
 ### 9.1 实施进度（2026-11-15）
@@ -699,7 +699,7 @@ caps 里用**进程内 `resources/list`** 枚举 —— 与工具用 `tools/list
 | P2 | ✅ 实机通过（2026-11-15） | `slice_client.c` 环形缓冲/预滚/1~30 s 切片；`mic_gate.c` VAD 驱动 | 串口可见 `vad_start -> slicing` / `vad_end Nms -> slice`；当天落盘 141 条切片 |
 | P3 | ✅ 已完成 + 自测 | `ws_gateway.py:972` `/slice/{session_id}`；`:86` 4 MB 闸 | 幂等、413/400、裸 PCM 全过；设备实机上传继续通过 |
 | P4 | ✅ 实机通过（2026-11-15） | `slice_client.c:313` 初始化、`:397` 截取、`:209` 上传、`:228` 补传 | 在线直推 + SD 补传；`:170` 把 `ts` 的 `+` 编码为 `%2B`，新事件时区正确 |
-| P5 | ✅ 已完成 + 真实数据跑通 | `tools/memory/nightly.py`、`query.py`、两个 systemd unit、`deploy_memory.sh` | `nightly --date 20261115`：141 事件 / 4.47 min，LLM 抽出板卡配置、设备树、编译输出等 topics |
+| P5 | ✅ 已完成 + 真实数据跑通 | `cloud/memory/nightly.py`、`query.py`、两个 systemd unit、`deploy_memory.sh` | `nightly --date 20261115`：141 事件 / 4.47 min，LLM 抽出板卡配置、设备树、编译输出等 topics |
 | P6 | ✅ 云端完成 / 设备侧不做 | `ws_gateway.py:1089` `/memory/query`、`:1172` `resources/list`、`:1178` `resources/read` | 模型侧一条工具指向 `/memory/query` |
 | P7 | ⬜ 未开始（改为“桌面活动画像”） | — | 不再做人物关系推断；只看时间块、主题分布、重复出现的项目/学习内容，依赖至少一周复盘数据 |
 
@@ -747,8 +747,8 @@ P0 → P1 是串行，且 P1 之前必须先定 D1 / D2 / D6。
 | PCM 回合内存账（10 s / 427 KB） | `main/middleware/ai/voice_service.h:18-27,45-50` |
 | OPUS 编码器配置项 | `managed_components/jason-mao__av_processor/include/av_processor_type.h:52,74-78` |
 | raw body HTTP POST 现成写法 | `main/middleware/ai/ai_camera.c:295-321`（`esp_http_client` + `set_post_field`） |
-| 网关 raw body 接收 / 4 MB 硬闸 | `tools/diag/ws_gateway.py:901-926`、`:86` |
-| 网关 ASR 转发（文件式端点） | `tools/diag/ws_gateway.py:304-319` |
+| 网关 raw body 接收 / 4 MB 硬闸 | `cloud/gateway/ws_gateway.py:901-926`、`:86` |
+| 网关 ASR 转发（文件式端点） | `cloud/gateway/ws_gateway.py:304-319` |
 | 动作队列深度 / 栈 | `main/middleware/ai/ai_action.c:61-71` |
 | tools/list 作为唯一真值 | `ai_action.c:9-29` |
 | 16 个动作表 | `ai_action.c:693-764` |
@@ -759,7 +759,7 @@ P0 → P1 是串行，且 P1 之前必须先定 D1 / D2 / D6。
 | 打卡流水 schema（append-only 原型） | `main/middleware/camera/punch_service.h:69-88,128-140` |
 | 设备打卡只读口 | `main/middleware/net/web_server.c:1348` |
 | codec 独占租借 | `main/middleware/audio/audio_service.h:132-143` |
-| ASR 是 HTTP 转发（不在本机） | `tools/diag/ws_gateway.py:304-319` |
+| ASR 是 HTTP 转发（不在本机） | `cloud/gateway/ws_gateway.py:304-319` |
 | 意图快路（设备别名优先） | `ws_gateway.py:580-629` |
 | action 下发 + 回执 | `ws_gateway.py:632-656` |
 | 主动推送 /push | `ws_gateway.py:928-950` |
@@ -808,14 +808,14 @@ P0 → P1 是串行，且 P1 之前必须先定 D1 / D2 / D6。
 
 | # | 位置 | 能力 | 自测证据 |
 |---|---|---|---|
-| 1 | `tools/diag/ws_gateway.py:972` | `POST /slice/<session>`：raw WAV/裸 PCM → ASR → `raw/<day>/events.jsonl` 追加；同 id 幂等；>4 MB 413 | `tools/memory/selftest_slice.py` 全 PASS |
+| 1 | `cloud/gateway/ws_gateway.py:972` | `POST /slice/<session>`：raw WAV/裸 PCM → ASR → `raw/<day>/events.jsonl` 追加；同 id 幂等；>4 MB 413 | `cloud/memory/selftest_slice.py` 全 PASS |
 | 2 | `ws_gateway.py:1046-1084` | `load_day_events()`：annotation 覆盖值合并（原始行不改） | 同上 |
 | 3 | `ws_gateway.py:1089` | `POST /memory/query`：`day/person/search/commitments`，每条带 `built_from` | 同上 |
 | 4 | `ws_gateway.py:1172` | `GET /memory/resources`：4 个资源契约 | 同上 |
 | 5 | `ws_gateway.py:1178` | `POST /memory/resources/read`：`uri + params → contents[]` | 同上 |
-| 6 | `tools/memory/nightly.py` | 补转写（annotation 追加）、LLM 抽取（失败退化规则）、统计、`derived/memory.db`、日报 | `selftest_nightly.py` 全 PASS |
-| 7 | `tools/memory/query.py` | 与 `/memory/query` 同口径的 CLI 诊断 | 手工跑通（见 §13.3-C） |
-| 8 | `tools/memory/pet-memory-nightly.{service,timer}`、`deploy_memory.sh` | 每天 03:05 跑昨天 | 部署脚本内含一次手动验收 |
+| 6 | `cloud/memory/nightly.py` | 补转写（annotation 追加）、LLM 抽取（失败退化规则）、统计、`derived/memory.db`、日报 | `selftest_nightly.py` 全 PASS |
+| 7 | `cloud/memory/query.py` | 与 `/memory/query` 同口径的 CLI 诊断 | 手工跑通（见 §13.3-C） |
+| 8 | `cloud/memory/pet-memory-nightly.{service,timer}`、`deploy_memory.sh` | 每天 03:05 跑昨天 | 部署脚本内含一次手动验收 |
 
 **目录结构**（`PET_MEMORY_DIR` 可覆盖，默认 `/opt/pet_memory`）：
 
@@ -901,7 +901,7 @@ curl -s -X POST http://127.0.0.1:8081/memory/resources/read \
    `Hash of data verified` / `Done`（`build/idf_app_flash_pttfix_full.log`）。
    本次整理后已做本地提交 `fe0e4c3`（未推送远端）。
 6. **历史事件时区已修，raw 被一次性重写**：`slice_client.c` 修好 `%2B` 之前落盘的 106 行
-   `ts` 是 `" ... 08:00"`；已用 `tools/memory/fix_ts.py` 原地修复，并留
+   `ts` 是 `" ... 08:00"`；已用 `cloud/memory/fix_ts.py` 原地修复，并留
    `/opt/pet_memory/raw/20261115/events.jsonl.bak_tsfix_20261115T080251Z` 备份。
    修复后 141 条事件全部是合法 `+08:00`，`/memory/query` 不再返回坏时间戳。
 7. **ASR 质量仍是真实短板**：141 条切片中有一部分 `text` 为空或语义偏差（例如把术语听成
@@ -931,7 +931,7 @@ curl -s -X POST http://127.0.0.1:8081/memory/resources/read \
 ### 13.6 云端实机部署与 AstrBot 插件验收（2026-11-15）
 
 > 这一节记录**已经发生在服务器上**的事实，不是设计目标。
-> 环境：`root@120.76.230.17`，AstrBot v4.29.1（容器 `astrbot`），网关 `pet-gateway:8081`。
+> 环境：`root@<server>`，AstrBot v4.29.1（容器 `astrbot`），网关 `pet-gateway:8081`。
 
 **A. 网关：合并而非覆盖**
 
@@ -940,7 +940,7 @@ curl -s -X POST http://127.0.0.1:8081/memory/resources/read \
 因此实际走合并：
 
 1. 备份 `ws_gateway.py.bak_memory_<YYYYMMDD_HHMMSS>`；
-2. `tools/astrbot_plugin_pet_memory/merge_gateway_memory.py` 只把本地 S10 记忆段（285 行）插到云端
+2. `cloud/astrbot_plugin_pet_memory/merge_gateway_memory.py` 只把本地 S10 记忆段（285 行）插到云端
    「插件主动推送」标记前，不改其它函数；
 3. 合并后 1651 行，`py_compile` 通过；保留 `tts_stream` 10 处、`_sse_pcm_chunks` 2 处、
    `tts_stream_endpoint` 1 处、`StreamingResponse` 2 处、`CIMG_PIXEL_CAP` 3 处；
@@ -972,7 +972,7 @@ NEXT Mon 2026-11-16 03:05:00 CST  pet-memory-nightly.timer
 | 重开 | `/记忆开关 on` → 恢复“已注册（管理器可见）” |
 | 空数据 | 承诺 0 条、日报 0 事件、搜索/人物 0 条，均不报错不编造 |
 | LLM 工具 | 自然语言触发 `pet_memory_query` 两次（`commitments` + `day`），返回 `items: []`，模型如实回答 |
-| 每日推送 | 订阅测试会话并把时间设为 `13:25`，日志出现 `13:25:28 [pet_memory] 日报已推送到 webchat:FriendMessage:webchat!xiao1!plugin-push-test` |
+| 每日推送 | 订阅测试会话并把时间设为 `13:25`，日志出现 `13:25:28 [pet_memory] 日报已推送到 webchat:FriendMessage:webchat!<account>!plugin-push-test` |
 
 推送验收后已复位：`daily_push_enabled=false`、`daily_push_time=08:30`、`daily_push_targets=[]`。
 
@@ -1081,7 +1081,7 @@ persona 来源：`/AstrBot/data/data_v4.db` 的 `personas` 表；`growth_persona
 ### 13.8 硬件闭环实机验收：P1–P4（2026-11-15）
 
 > 这一节只记录**串口和服务器上真实发生的事实**。设备 `session=xz-s31-fc50`，
-> 串口 `COM9` / 115200 8N1，STA IP `10.168.1.198`，网关 `120.76.230.17:8081`。
+> 串口 `COM9` / 115200 8N1，STA IP `10.168.1.198`，网关 `<server>:8081`。
 
 **A. 构建与烧录**
 
@@ -1097,7 +1097,7 @@ persona 来源：`/AstrBot/data/data_v4.db` 的 `personas` 表；`growth_persona
 I (4581) MIC_GATE: supervisor started
 I (9013) MIC_GATE: listening: BSS layout=MM
 I (9711) esp_netif_handlers: sta ip: 10.168.1.198
-I (20661) WS: CONNECTED (ws://120.76.230.17:8081/ws/xz-s31-fc50)
+I (20661) WS: CONNECTED (ws://<server>:8081/ws/xz-s31-fc50)
 ```
 
 同一份 `build/serial_com9_tsfix_boot.txt` 中 `task_wdt` 出现 **0** 次、`afe_feed` **0** 次。
@@ -1167,7 +1167,7 @@ I (66293) SLICE: pending evt_20261115T154558_80 retried
 2. **`ts` 里的 `+` 被服务端解成空格**：`slice_client.c:167-183` 新增 `ts_enc[64]`，
    把 `+` 转成 `%2B`；修复前 raw 是 `"2026-11-15T15:39:53 08:00"`，
    修复后新事件是 `"2026-11-15T15:56:40+08:00"`；历史 106 行另用
-   `tools/memory/fix_ts.py` 修复并备份。
+   `cloud/memory/fix_ts.py` 修复并备份。
 3. **PTT 报“麦克风被占用”**：`xiaozhi_service_start()` 在 gate 持麦时提前拒绝，
    UI 没机会走到 `mic_gate_yield()`。修复为 gate owner 也允许入队，由 `session_setup()`
    交接；新固件串口 `PET_SVC: ptt UP -> ESP_OK (130560 B / 4080 ms)` 证明 PTT
@@ -1235,7 +1235,7 @@ G4 保留开关，默认关闭；P7 从“主体画像”改为“桌面活动�
 
 ### C. 代码改动
 
-`tools/memory/nightly.py`：
+`cloud/memory/nightly.py`：
 
 - `LLM_PROMPT` 改为“桌面复盘整理器”；
 - 新增 `headline`、`themes`、`timeline`、`decisions`、`learning`、`open_loops`、
@@ -1243,7 +1243,7 @@ G4 保留开关，默认关闭；P7 从“主体画像”改为“桌面活动�
 - 新增 `_clean_items()` 收敛 LLM 列表字段；`run()` 对新增字段统一 `attach_built_from`；
 - 报告写 `schema_version: 2`；无 LLM 时新增字段为空数组，标 `source="rule"`。
 
-`tools/astrbot_plugin_pet_memory/main.py`：
+`cloud/astrbot_plugin_pet_memory/main.py`：
 
 - `_collect_facts()` 把新字段带进 facts；
 - `_refresh_growth_cache()` 注入最近三天的 headline、主题、未闭环、明天动作；
@@ -1320,7 +1320,7 @@ G4 保留开关，默认关闭；P7 从“主体画像”改为“桌面活动�
 
 ### B. 回收机制
 
-云端新增 `tools/memory/retention.py`，只处理严格 8 位日期目录：
+云端新增 `cloud/memory/retention.py`，只处理严格 8 位日期目录：
 
 - 音频默认保留 **30 天**：删 `audio/<YYYYMMDD>/`；
 - 云端分组音频同属音频产物，默认也保留 **30 天**：删 `audio_grouped/<YYYYMMDD>/`；
@@ -1461,7 +1461,7 @@ MIC_GATE: merge window closed -> slice
 
 ### C. 云端 A：相邻切片合并成 30-60 s 语音组
 
-新增 `tools/memory/group_audio.py`，已部署到 `/opt/pet_memory/bin/`：
+新增 `cloud/memory/group_audio.py`，已部署到 `/opt/pet_memory/bin/`：
 
 ```text
 raw/<day>/events.jsonl + audio/<day>/*.wav
@@ -1523,7 +1523,7 @@ raw/<day>/events.jsonl + audio/<day>/*.wav
 
 ### B. 云端空数据短路
 
-`tools/memory/nightly.py` 在进入分组/ASR/LLM 之前先看统计：
+`cloud/memory/nightly.py` 在进入分组/ASR/LLM 之前先看统计：
 
 | 条件 | 结果 |
 |---|---|

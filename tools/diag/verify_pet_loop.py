@@ -11,7 +11,7 @@ UI 队列），断了以后**屏幕上都没反应**，只看现象完全无法�
 
 用法：
     python tools/diag/verify_pet_loop.py --ip 192.168.10.111
-    python tools/diag/verify_pet_loop.py --ip 192.168.4.1 --gw http://120.76.230.17:8081 --no-tts
+    python tools/diag/verify_pet_loop.py --ip 192.168.4.1 --gw http://<gw-host>:8081 --no-tts
 
 前置：设备已开、已连 WiFi、`/api/system/status` 的 link.connected 为 true。
 串口默认 COM9，可用 --port 改。
@@ -51,7 +51,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ip", default="192.168.10.111", help="设备 IP")
     ap.add_argument("--port", default="COM9", help="串口")
-    ap.add_argument("--gw", default="http://120.76.230.17:8081", help="网关 http 基址")
+    ap.add_argument("--gw", default="http://127.0.0.1:8081", help="网关 http 基址")
     ap.add_argument("--secs", type=float, default=25.0, help="抓日志时长")
     ap.add_argument("--text", default="桌宠链路自检：收到这句话说明云端推送通了。")
     ap.add_argument("--no-tts", action="store_true", help="不请求 TTS（只验文字/表情）")

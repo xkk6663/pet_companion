@@ -3,7 +3,7 @@
 > 分支：`端侧人脸识别`。本文只覆盖**点歌/曲库**这条线（`ai_music.*` + 新增两个模块），
 > 不动 `ai_camera / ai_light / ai_speaker / ai_punch / ai_device`，不动音频仲裁与会话状态机。
 >
-> 云端文档见 `display_audio_photo/tools/music_proxy/NETEASE_JS_API_直连对接.md`（JS API 部署 + 接口字段）。
+> 云端文档见 `pet_companion/cloud/music_proxy/NETEASE_JS_API_直连对接.md`（JS API 部署 + 接口字段）。
 
 ---
 

@@ -251,13 +251,13 @@ Docker 跑 AstrBot（`:6185`），在面板里配 LLM / TTS / STT / VLM / embedd
 **② 网关侧：填三个字段就能起来**
 
 ```bash
-# 服务器上 /opt/pet_gateway/
-scp ws_gateway.py config.json pet-gateway.service root@<server>:/opt/pet_gateway/
-bash deploy_gateway.sh          # 建 venv、装依赖、systemd 常驻、开机自启
-systemctl restart pet-gateway
+# 本地仓库 → 服务器 /tmp/gw/（deploy 脚本会建 venv、装依赖、装 systemd、起服务）
+scp cloud/gateway/ws_gateway.py cloud/gateway/pet-gateway.service \
+    cloud/gateway/config.example.json root@<server>:/tmp/gw/
+ssh root@<server> 'cd /tmp/gw && mv config.example.json config.json && bash deploy_gateway.sh'
 ```
 
-`config.json` 里只有三样必须改：
+`config.json` 里只有三样必须改（模板里的 key 是占位符，改完 `chmod 600`）：
 
 ```json
 {
@@ -410,15 +410,18 @@ python tools/layering/layer_guard.py --baseline tools/layering/layering_baseline
 
 ```bash
 # 网关：FastAPI + systemd
-bash tools/diag/deploy_gateway.sh
+bash cloud/gateway/deploy_gateway.sh
 curl -s http://127.0.0.1:8081/health          # {"ok":true,...,"version":"0.8.1"}
 
 # 音源代理：Docker
-cd tools/music_proxy && docker compose up -d music-proxy
+cd cloud/music_proxy && docker compose up -d music-proxy
 ```
 
-部署完把 `tools/diag/ws_gateway.py`、`config.json`（密钥已打码）、`pet-gateway.service` 同步到
-`/opt/pet_gateway/`。别忘了在云厂商安全组放行 `8081`。
+部署完把 `cloud/gateway/ws_gateway.py`、`config.example.json`（在服务器上改名为 `config.json`，
+密钥是占位符）、`pet-gateway.service` 同步到 `/opt/pet_gateway/`。别忘了在云厂商安全组放行 `8081`。
+
+> 五个云端组件的**完整部署顺序**（AstrBot → 网关 → 音源代理 → 记忆 → 插件）与"必须自备、绝不入库"的清单见
+> [`cloud/README.md`](cloud/README.md)。
 
 ---
 
@@ -449,9 +452,15 @@ components/                   esp_bt_audio（A2DP Source + gmf io_bt）
 littlefs_content/             烧进 storage 的模型与素材（不进固件）
 docs/                         工程规范 / 开发文档 / 项目规划 / 汇报 / 硬件图
 docs/assets/svg/              10 张架构图（系统全景 / 接入拓扑 / 分层模型 / 时序 / 媒体链路…）
-tools/diag/                   云端网关 ws_gateway.py + 部署 / 联调脚本
+
+cloud/                        云端侧全部代码（init/部署说明见 cloud/README.md）
+├── gateway/                  网关 ws_gateway.py + config.example.json + systemd + 部署脚本
+├── music_proxy/              点歌音源代理（Docker，:8080）
+├── memory/                   S10 记忆工具：夜间抽取 / 保留期 / 查询 + timer
+└── astrbot_plugin_pet_memory/ AstrBot 长期记忆插件
+
+tools/diag/                   设备侧联调：serial_watch / verify_pet_loop / screen_shot
 tools/layering/               分层护栏 layer_guard.py + 存量基线（CI 直接调用）
-tools/music_proxy/            点歌音源代理（Docker）
 ```
 
 | 规模 | 数值 |
@@ -490,10 +499,11 @@ tools/music_proxy/            点歌音源代理（Docker）
 |---|---|
 | `tools/diag/serial_watch.py` | 串口日志观察，桌宠闭环联调 |
 | `tools/diag/verify_pet_loop.py` | 端到端验证：云端 push → WS → 设备日志 |
-| `tools/diag/ws_gateway.py` | 云端网关（FastAPI），唯一入口 / 能力中继 / 媒体归一化 |
-| `tools/diag/deploy_gateway.sh` | 网关服务器侧一键部署 |
+| `cloud/gateway/ws_gateway.py` | 云端网关（FastAPI），唯一入口 / 能力中继 / 媒体归一化 |
+| `cloud/gateway/deploy_gateway.sh` | 网关服务器侧一键部署（`config.json` 已存在则不覆盖，防冲掉线上 key） |
+| `cloud/music_proxy/` | 点歌音源代理（Docker） |
 | `tools/layering/layer_guard.py` | 分层护栏：G1~G6 六条规则，`--baseline` 只报新增，`--update-baseline <path>` 刷新基线 |
-| `tools/music_proxy/` | 点歌音源代理（Docker） |
+| [`cloud/README.md`](cloud/README.md) | 云端四个子目录的部署顺序 + **需要自备但绝不入库**的密钥清单 |
 
 **排障口诀**：先看 `[GW]` 日志定位"云端没发 / 设备没收到"，再看设备 `EVT:` 日志定位
 "收到没处理"，最后看 `[pet_device]` 判断"模型有没有调工具"。三段都用逐帧日志，
@@ -506,7 +516,7 @@ tools/music_proxy/            点歌音源代理（Docker）
 - [分层解耦评估与优化方案（2026-11-20）](docs/项目规划/分层解耦评估与优化方案_2026-11-20.md) —— 审计结论、P0~P4 实施记录、上机崩溃复盘
 - [云端网关开发文档](docs/开发文档/S9_云端网关_开发文档.md) —— 接口契约、AstrBot 对接硬约束、插件开发
 - [通信接口规范 ICD](docs/开发文档/通信接口规范_ICD.md) —— 帧格式与字段级定义
-- [S10 陪伴体三层扩展](docs/开发文档/S10_陪伴体三层扩展_闸门_记忆与MCP资源.md) —— 闸门（VAD 事件切片）、记忆（append-only 事件流）与 MCP resources：P0/P3/P5/P6 已实施，P1/P2/P4 默认关闭待实机验收（工具见 [tools/memory](tools/memory/README.md)）
+- [S10 陪伴体三层扩展](docs/开发文档/S10_陪伴体三层扩展_闸门_记忆与MCP资源.md) —— 闸门（VAD 事件切片）、记忆（append-only 事件流）与 MCP resources：P0/P3/P5/P6 已实施，P1/P2/P4 默认关闭待实机验收（工具见 [cloud/memory](cloud/memory/README.md)）
 - [工程规范](docs/工程规范/) —— 分层 / 命名 / 注释 / 代码风格 / 问题复盘
 - [开发文档](docs/开发文档/) —— 蓝牙 A2DP 移植、内存优化、点歌、人脸、AI 浮窗
 - [项目规划](docs/项目规划/) —— 需求文档、todolist、改动记录（§ 编号可追溯）

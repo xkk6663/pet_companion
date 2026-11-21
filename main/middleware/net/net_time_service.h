@@ -29,18 +29,18 @@ extern "C" {
 #endif
 
 /* ---- 和风天气配置（编译期可用 -D 覆盖，避免把私钥散落到代码逻辑里） ---- */
-/* ★ QWEATHER_KEY 的兜底值 = **本地未提交改动**里的真 Key（不是占位符）。
- *   正式做法是 `tools/build.ps1` 经 `-D` 注入（见改动记录 §16），此处只在未注入时兜底。
- * ⚠ 正因为它是真 Key，**这一行绝不能被 commit** —— 提交前请改回占位符 "YOUR_QWEATHER_KEY"。
- *   （原注释写的 "TODO: 填入自己的" 已过期：值早就填了，TODO 反而让人误以为这里还是占位符。） */
+/* ★ 红线：QWEATHER_KEY / API Host 绝不写进被 git 跟踪的源码。
+ *   真值只放环境变量（`tools/idf_env.local.ps1`，已 .gitignore），构建时由
+ *   `main/CMakeLists.txt` 读 `$ENV{QWEATHER_*}` 注入成 -D 宏。
+ *   未注入时下面的空占位生效 —— 行为与"没配 key"一致：打印 not configured 并跳过天气。 */
 #ifndef QWEATHER_KEY
-#define QWEATHER_KEY        "a7928653a66a4b82ad2fe36a7a835bf4"
+#define QWEATHER_KEY        ""
 #endif
 #ifndef QWEATHER_LOC_ID
-#define QWEATHER_LOC_ID     "101280101"           /* 广州 */
+#define QWEATHER_LOC_ID     ""                    /* 城市 ID 同样由环境变量注入 */
 #endif
 #ifndef QWEATHER_API_HOST
-#define QWEATHER_API_HOST   "ke67cgkc3a.re.qweatherapi.com" /* ★ 账号专属 API Host（devapi 已 2026-01-01 停服，见 F17）*/
+#define QWEATHER_API_HOST   ""                    /* 账号专属 API Host（devapi 已于 2026-01 停服，见 F17）*/
 #endif
 #ifndef QWEATHER_REFRESH_SEC
 #define QWEATHER_REFRESH_SEC 3600                 /* 天气刷新周期：1 小时 */

@@ -73,9 +73,12 @@ static const char *TAG = "WS";
 #define WS_NVS_NS            "pet_cfg"
 #define WS_NVS_KEY_BASE      "ws_base"
 
-/* 编译期默认（可被 CMake -DPET_GATEWAY_URL_DEFAULT=... 覆盖，见 tools/idf_env.local.ps1） */
+/* 编译期默认：**留空**。网关地址只从网页管理端来（NVS `pet_cfg/ws_base`），
+ * 服务器地址不进被 git 跟踪的源码。
+ * 需要编死一个地址时：`-DPET_GATEWAY_URL_DEFAULT="ws://<host>:8081/ws/"`，
+ * 或构建前 `$env:PET_GATEWAY_URL`（CMakeLists 会注入同名宏）。 */
 #ifndef PET_GATEWAY_URL_DEFAULT
-#define PET_GATEWAY_URL_DEFAULT  "ws://120.76.230.17:8081/ws/"
+#define PET_GATEWAY_URL_DEFAULT  ""
 #endif
 
 /* ---- 连接位 ---- */
@@ -487,6 +490,13 @@ esp_err_t ws_client_start(void)
     /* 地址可能在 NVS 里被网页端改过：每次 start 重新装一次（幂等，几百 us） */
     load_base_from_nvs();
     compose_uri();
+    if (!uri_scheme_ok(s_uri)) {
+        /* 既没编死默认值、NVS 里也没配：直接返回，别让 supervisor 空转刷重连日志 */
+        s_want = false;
+        ESP_LOGW(TAG, "网关地址未配置：请在网页管理端填 ws://<host>:8081/ws/（存 NVS %s/%s）",
+                 WS_NVS_NS, WS_NVS_KEY_BASE);
+        return ESP_ERR_INVALID_STATE;
+    }
     if (xTaskCreate(ws_sup_task, WS_SUP_NAME, WS_SUP_STACK, NULL, WS_SUP_PRIO,
                     &s_sup_task) != pdPASS) {
         s_want = false;

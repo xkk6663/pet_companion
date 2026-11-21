@@ -62,11 +62,11 @@ AstrBot 动态 `add_func()` 造出的 `FuncTool` 天生 `active=True`、`handler
 
 ## 4. 安装（云端服务器）
 
-AstrBot 实际运行在 `root@120.76.230.17`，数据目录 `/opt/astrbot/data`，容器名 `astrbot`。
+AstrBot 实际运行在 `root@<server>`，数据目录 `/opt/astrbot/data`，容器名 `astrbot`。
 
 ```bash
 # 在服务器上，从本仓库拷贝
-cd /opt/pet_companion/tools/astrbot_plugin_pet_memory   # 或你放源码的位置
+cd /opt/pet_companion/cloud/astrbot_plugin_pet_memory   # 或你放源码的位置
 bash install.sh                 # 只拷贝，不重启
 bash install.sh --restart       # 拷贝后 docker restart astrbot
 ```
@@ -74,10 +74,10 @@ bash install.sh --restart       # 拷贝后 docker restart astrbot
 或从本地直接推：
 
 ```powershell
-scp -i C:\Users\xiao1\Downloads\_xkk_3.pem -r `
-  tools\astrbot_plugin_pet_memory `
-  root@120.76.230.17:/opt/astrbot/data/plugins/
-ssh -i C:\Users\xiao1\Downloads\_xkk_3.pem root@120.76.230.17 "docker restart astrbot"
+scp -i ~/.ssh/<key>.pem -r `
+  cloud\astrbot_plugin_pet_memory `
+  root@<server>:/opt/astrbot/data/plugins/
+ssh -i ~/.ssh/<key>.pem root@<server> "docker restart astrbot"
 ```
 
 插件目录最终为：
@@ -142,7 +142,7 @@ WebUI → 插件 → 每日转写与记忆 → 齿轮：
 
 ## 8. 云端部署实录（2026-11-15）
 
-实测环境：`root@120.76.230.17`，AstrBot v4.29.1，容器 `astrbot`，WebUI `:6185`。
+实测环境：`root@<server>`，AstrBot v4.29.1，容器 `astrbot`，WebUI `:6185`。
 
 ### 8.1 网关：合并，不覆盖
 
@@ -176,7 +176,7 @@ NEXT Mon 2026-11-16 03:05:00 CST  pet-memory-nightly.timer
 | 有数据日报 | 样例日报渲染出“人物：张总 / 承诺 1 条 / 话题：方案、周五”，测试文件已删除 |
 | LLM 工具 | 自然语言触发 `pet_memory_query` 两次（commitments + day），返回真实空结果，模型如实说明“没有记录” |
 | 切片 | 1 s 静音 WAV POST `/slice/selftest` 返回 200，`raw/20260101` 与 `audio/20260101` 落盘；`/memory/query` 读到 1 条事件（测试数据已清理） |
-| 每日推送 | 订阅测试会话并把时间设为 `13:25`，AstrBot 日志出现 `13:25:28 [pet_memory] 日报已推送到 webchat:FriendMessage:webchat!xiao1!plugin-push-test` |
+| 每日推送 | 订阅测试会话并把时间设为 `13:25`，AstrBot 日志出现 `13:25:28 [pet_memory] 日报已推送到 webchat:FriendMessage:webchat!<account>!plugin-push-test` |
 
 推送验收后已复位：`daily_push_enabled=false`、`daily_push_time=08:30`、`daily_push_targets=[]`。
 

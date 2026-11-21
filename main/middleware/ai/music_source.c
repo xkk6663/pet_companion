@@ -39,16 +39,18 @@
 
 static const char *TAG = "MUSIC_SRC";
 
-/* ---- 编译期默认值（CMakeLists 可用 -D 覆盖） ----
- * ★★ 必须给真值：全仓库**没有**任何地方调 music_source_set_cfg()，
- *   默认留空就等于"云侧点歌永久失效"——`music_source_search()` 一进来
- *   就看到 base 为空直接返回 -1，设备端只回一句"没找到可播的版本"（F59）。
+/* ---- 编译期默认值（CMakeLists 用 -D 覆盖） ----
+ * ★ 红线：地址与 token **绝不写进被 git 跟踪的源码**（真值只在服务器与
+ *   `tools/idf_env.local.ps1` 里）。构建时 `main/CMakeLists.txt` 读
+ *   `$ENV{MUSIC_BASE_URL}` / `$ENV{MUSIC_TOKEN}` 注入同名宏。
+ *   未注入时空占位生效 = "云音源未配置"：`music_source_search()` 直接返回 -1，
+ *   设备回一句"没找到可播的版本"（F59 的已知行为）；本地 SD 曲库不受影响。
  *   地址＝服务器上的 music_proxy 容器（8080，与网关 8081 同机）。 */
 #ifndef MUSIC_BASE_URL_DEFAULT
-#define MUSIC_BASE_URL_DEFAULT "http://120.76.230.17:8080"
+#define MUSIC_BASE_URL_DEFAULT ""
 #endif
 #ifndef MUSIC_TOKEN_DEFAULT
-#define MUSIC_TOKEN_DEFAULT "04d7978286b0ff50983b33936f466d0d"
+#define MUSIC_TOKEN_DEFAULT ""
 #endif
 
 #define MUSIC_SRC_NVS_NS      "music_cfg"

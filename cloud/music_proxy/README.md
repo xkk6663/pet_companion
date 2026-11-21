@@ -35,7 +35,7 @@
 ## 3. 部署 A：Docker Compose（推荐）
 
 ```bash
-# 把整个 tools/music_proxy 目录传到云服务器
+# 把整个 cloud/music_proxy 目录传到云服务器
 scp -r music_proxy/ root@<你的服务器>:/opt/
 
 cd /opt/music_proxy
