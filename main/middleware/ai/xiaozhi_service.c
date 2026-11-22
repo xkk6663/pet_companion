@@ -1268,7 +1268,18 @@ void xiaozhi_service_init(void)
     ESP_ERROR_CHECK(ws_client_init());
     ws_client_set_rx_cb(on_ws_line, NULL);
     ws_client_set_state_cb(on_ws_state, NULL);
-    ESP_ERROR_CHECK(ws_client_start());
+    /* ★ 网关地址是**可选项**：未配置时 ws_client_start() 按设计返回
+     *   ESP_ERR_INVALID_STATE（"别让 supervisor 空转"）。
+     *   以前这里用 ESP_ERROR_CHECK，未配网关的设备会在开机 init 阶段直接
+     *   abort → 连续 3 次启动失败进 SAFE MODE（相机/音频/AI 全跳过）——
+     *   这是把"没配网关"误判成"启动故障"。改为只告警，Web/相机照常可用。 */
+    {
+        esp_err_t wsr = ws_client_start();
+        if (wsr != ESP_OK) {
+            ESP_LOGW(TAG, "ws_client_start: %s (gateway disabled until configured)",
+                     esp_err_to_name(wsr));
+        }
+    }
 
     /* 工具层：相机 explain 客户端 + 结果上桥 */
     if (ai_camera_init() == ESP_OK) {

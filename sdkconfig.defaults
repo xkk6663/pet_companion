@@ -378,3 +378,8 @@ CONFIG_MIC_FE_INVERT_R=y
 ## §29：本地音乐 gmf pool 的 rate_cvt 诊断开关（main/Kconfig.projbuild）
 ##   默认 y；设 n 仅用于 A/B 定位 task_wdt，非 44100 源会建链失败。
 CONFIG_PET_MP_RATE_CVT_ENABLE=y
+
+## 2026-11-22：两套 httpd（:80 主服务 + :81 推流 + ctrl 32769）与浏览器并行连接叠加，
+## 默认 10 个 socket 会被 accept(ENFILE) 打爆（日志 `httpd_accept_conn: error in accept (23)`），
+## 表现是网页"预检相机状态…"卡死、所有新连接被 RST。提到 24 给页面并发留余量。
+CONFIG_LWIP_MAX_SOCKETS=24

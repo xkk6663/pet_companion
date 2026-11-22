@@ -16,9 +16,9 @@
   header h1{ font-size:17px; font-weight:600; flex:1; }
   #dot{ width:10px; height:10px; border-radius:50%; background:var(--bad); }
   #dot.on{ background:var(--ok); }
-  nav{ display:flex; gap:8px; padding:10px 16px; background:var(--card);
+  nav{ display:flex; flex-wrap:wrap; gap:8px; padding:10px 16px; background:var(--card);
        border-bottom:1px solid var(--line); position:sticky; top:53px; z-index:5; }
-  nav button{ flex:1; padding:9px 0; border:1px solid var(--line); border-radius:8px;
+  nav button{ flex:1 1 88px; padding:9px 0; border:1px solid var(--line); border-radius:8px;
               background:transparent; color:var(--dim); font-size:14px; }
   nav button.on{ background:var(--acc); border-color:var(--acc); color:#fff; }
   main{ padding:14px 16px 40px; max-width:960px; margin:0 auto; }
@@ -120,6 +120,7 @@
   <button data-p="media">媒体浏览</button>
   <button data-p="manage">壁纸/音乐</button>
   <button data-p="screen">屏幕</button>
+  <button data-p="cam">摄像头</button>
 </nav>
 <main>
   <div id="page-live" class="page on">
@@ -233,6 +234,49 @@
       <div class="muted" id="scr-stat" style="margin-top:8px">-</div>
     </div>
   </div>
+
+  <div id="page-cam" class="page">
+    <div class="card">
+      <div class="muted" style="margin-bottom:8px">
+        相机 1280×720 JPEG 直出（传感器硬件编码，CPU 不参与）· 单客户端 · 开启期间相机被独占
+      </div>
+      <div style="position:relative; background:#000; border-radius:8px; overflow:hidden;
+                  aspect-ratio:16/9;">
+        <img id="cam-img" alt=""
+             style="width:100%;height:100%;object-fit:contain;transform:rotate(180deg)">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center">
+        <button id="cam-btn" onclick="camToggle()"
+          style="padding:8px 18px;border-radius:8px;border:1px solid var(--acc);
+                 background:var(--acc);color:#fff;font-size:14px">开启监控</button>
+        <button id="cam-force" onclick="camForce()"
+          style="padding:8px 14px;border-radius:8px;border:1px solid #c58b2a;
+                 background:transparent;color:inherit;font-size:14px">强制让出相机</button>
+        <label class="muted">画质
+          <select id="cam-q">
+            <option value="8">清晰 q8</option>
+            <option value="12" selected>标准 q12</option>
+            <option value="20">流畅 q20</option>
+            <option value="28">省流 q28</option>
+          </select>
+        </label>
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="cam-flip"> 正立（旋转 180°）
+        </label>
+        <label class="muted" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="cam-mirror"> 左右翻转
+        </label>
+      </div>
+      <div class="muted" id="cam-stat" style="margin-top:8px">未开启 — 点“开启监控”后相机被占用</div>
+      <div class="muted" style="margin-top:6px">
+        · 开启监控会自动关闭设备端 CAM / VIDEO 预览（相机交给网页独占）。<br>
+        · 正在录像不会被悄悄打断：请先结束录制，或点“强制让出相机”（会停录并保存，等收尾）。<br>
+        · 人脸打卡 / 拍照 / 云端识图进行中会拒绝让出，等它自己结束。<br>
+        · 网页服务是单任务模型，但推流已拆到独立端口（:81），监控中其它页面照常可用。<br>
+        · 设备端若正在 VIDEO 页看 720p 取景，网页会直接“搭车”同一路码流，不打断设备预览。
+      </div>
+    </div>
+  </div>
 </main>
 
 <div id="lightbox" onclick="lbClose()">
@@ -275,6 +319,7 @@ document.querySelectorAll('nav button').forEach(b => {
     if (b.dataset.p === 'media') loadDir(curDir);
     if (b.dataset.p === 'manage') loadManage();
     if (b.dataset.p === 'companion') cpStart(); else cpStop();   /* 只在看这一页时轮询 */
+    if (b.dataset.p !== 'cam' && camWanted) camStop();   /* 离开摄像头页：先释放相机，避免单任务 httpd 饿死后续请求 */
     if (b.dataset.p === 'screen') scrShot(scrScale());
     else if (scrTimer) scrToggleLive();       /* 离开屏幕页就停连续抓图 */
   };
@@ -528,9 +573,135 @@ function scrToggleLive() {
   scrTimer = setTimeout(tick, 0);
 }
 
+/* ---------- 摄像头实时监控（/stream.mjpg = 720p 传感器 JPEG 直出） ----------
+ * 开流前先 GET /api/camera/stream 预检：<img> 拿不到 409 状态码，只有 onerror，
+ * 预检能把"设备端相机页占用 / 录像中 / 已有流"的原因显示出来。
+ * 关闭 = 移除 src 断开 multipart 连接，handler 退出时 camera_service_stop()，
+ * 相机真正释放。推流走独立 httpd 实例（:81），监控中管理页照常响应。 */
+let camOn = false, camWanted = false, camT0 = 0, camTimer = null, camIgnErr = false;
+const camSleep = ms => new Promise(r => setTimeout(r, ms));
+/* ★ 两个独立开关：旋转 180°（物理倒装）与左右翻转（镜像），可叠加。
+ *   都作用在 <img> 的 CSS transform 上，码流本身不动 —— 零解码/零带宽代价。 */
+function camFlip() {
+  const im = $('#cam-img');
+  if (!im) return;
+  const rot = ($('#cam-flip') && $('#cam-flip').checked) ? 'rotate(180deg)' : '';
+  const mir = ($('#cam-mirror') && $('#cam-mirror').checked) ? 'scaleX(-1)' : '';
+  const tf = (rot + ' ' + mir).trim();
+  im.style.transform = tf || 'none';
+}
+$('#cam-flip').onchange = camFlip;
+$('#cam-mirror').onchange = camFlip;
+async function camPreflight() {
+  /* ★ 必须带超时：httpd 单任务 + WiFi 抖动时 fetch 可能挂几十秒不返回，
+   *   页面就会一直停在"预检相机状态…"（实测就是这个现象）。 */
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), 4000);
+  try {
+    const r = await fetch('/api/camera/stream?t=' + Date.now(),
+                          { cache: 'no-store', signal: ac.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(to);
+  }
+}
+/* waitSec：预检 busy 且 retry=1 时最多等这么久（录像收尾用，秒） */
+async function camStart(waitSec) {
+  if (camWanted) return;              /* 预检/等待中重复点击 = 忽略 */
+  const st = $('#cam-stat');
+  camWanted = true;
+  $('#cam-btn').textContent = '取消';
+  st.textContent = '预检相机状态…';
+  const deadline = Date.now() + (waitSec || 0) * 1000;
+  /* ★ j 必须声明在循环外：`break` 跳出后还要用 j.port 拼推流地址，
+   *   声明在 while 块内会 ReferenceError: j is not defined（表现为永久停在"预检相机状态…"）。 */
+  let j = null;
+  while (camWanted) {
+    j = null;
+    try { j = await camPreflight(); }
+    catch (e) {
+      if (!camWanted) return;
+      camWanted = false;
+      $('#cam-btn').textContent = '开启监控';
+      st.textContent = (e.name === 'AbortError')
+        ? '预检超时：设备无响应，请重试'
+        : '网络错误：' + e.message;
+      return;
+    }
+    if (!camWanted) return;           /* 等待期间点了取消 / 切页 */
+    if (j.ok) break;
+    if (j.retry && Date.now() < deadline) {
+      st.textContent = '等待相机释放…（' + (j.reason || 'busy') + '）';
+      await camSleep(1000);
+      continue;
+    }
+    camWanted = false;
+    $('#cam-btn').textContent = '开启监控';
+    st.textContent = '无法开启：' + (j.reason || 'camera busy')
+                   + (j.can_release ? '（可点“强制让出相机”）' : '');
+    return;
+  }
+  if (!camWanted) return;
+  camOn = true; camT0 = performance.now(); camIgnErr = false;
+  camFlip();
+  /* 推流走独立 httpd 实例（预检返回 port，默认 81）；80 表示回退同源 */
+  const sport = j.port || 80;
+  const sbase = (sport === 80) ? '' :
+      ((location.protocol === 'https:' ? 'https:' : 'http:') + '//' + location.hostname + ':' + sport);
+  $('#cam-img').src = sbase + '/stream.mjpg?q=' + $('#cam-q').value + '&t=' + Date.now();
+  $('#cam-btn').textContent = '关闭监控';
+  st.textContent = '连接中…';
+  clearInterval(camTimer);
+  camTimer = setInterval(() => {
+    if (!camOn) return;
+    const s = Math.floor((performance.now() - camT0) / 1000);
+    st.textContent = '监控中 ' + s + ' s · 720p JPEG 直出';
+  }, 1000);
+}
+function camStop() {
+  camWanted = false;
+  camOn = false;
+  clearInterval(camTimer); camTimer = null;
+  camIgnErr = true;                    /* 移除 src 会触发 onerror，忽略这一次 */
+  $('#cam-img').removeAttribute('src');
+  $('#cam-btn').textContent = '开启监控';
+  $('#cam-stat').textContent = '已关闭 — 相机已释放';
+}
+function camToggle() { camWanted ? camStop() : camStart(0); }
+/* 强制让出：停设备端预览（安全），或结束录像（收尾后自动开流） */
+async function camForce() {
+  if (camWanted) camStop();
+  if (!confirm('强制让出相机会停止设备端当前的相机使用：\n'
+             + '· 正在录像会被结束并保存（需要等收尾几秒）\n'
+             + '· CAM / VIDEO 预览会关闭\n继续？')) return;
+  const st = $('#cam-stat');
+  st.textContent = '正在让出相机…';
+  try {
+    const r = await fetch('/api/camera/release', { method: 'POST', cache: 'no-store' });
+    const j = await r.json();
+    if (!j.ok) { st.textContent = '让出失败：' + (j.reason || 'unknown'); return; }
+    st.textContent = (j.action === 'recording_stopping' || j.action === 'wait_finalize')
+      ? '录像收尾中，等待相机释放…' : '已让出，正在开启监控…';
+    await camStart(20);                /* 轮询预检最多 20 s，直到 IDLE 再开流 */
+  } catch (e) {
+    st.textContent = '网络错误：' + e.message;
+  }
+}
+$('#cam-img').onload = () => {
+  if (camOn) $('#cam-stat').textContent = '已连接 1280×720 · 720p JPEG 直出';
+};
+$('#cam-img').onerror = () => {
+  if (!camOn || camIgnErr) { camIgnErr = false; return; }
+  camStop();
+  $('#cam-stat').textContent = '画面中断（相机被设备端占用或网络断开）';
+};
+
 /* ---------- 打卡事件轮询（1s；gen 代际号机制，见 web_server.c） ---------- */
 let gen = -1;
 async function pollPunch() {
+  /* ★ 监控流占着单任务 httpd：轮询请求会一直排队，直接跳过（1 s 后再试） */
+  if (camWanted) { setTimeout(pollPunch, 1000); return; }
   try {
     const r = await fetch('/api/punch/last?gen=' + gen, {cache:'no-store'});
     const j = await r.json();

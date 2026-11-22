@@ -1385,7 +1385,7 @@ static void refresh(lv_timer_t *t)
                 if (taken) lv_obj_add_state(btns[i], LV_STATE_DISABLED);
                 else       lv_obj_remove_state(btns[i], LV_STATE_DISABLED);
             }
-            lv_label_set_text_static(s_status, taken ? "Cam busy: VIDEO recording"
+            lv_label_set_text_static(s_status, taken ? "Cam busy: media in use"
                                                     : (camera_service_is_running() ? "Preview running"
                                                                                   : "Stopped"));
         }

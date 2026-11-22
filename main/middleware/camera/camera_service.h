@@ -136,6 +136,16 @@ cam_owner_t camera_service_owner(void);
 void camera_service_set_observer(camera_frame_cb_t cb, void *user);
 
 /**
+ * @brief 第二观察者（与 set_observer 并行、互不顶替）
+ *
+ * 用途：网页 MJPEG 推流"搭车"设备端 720p 取景流 —— 设备取景器占着第一观察者，
+ * 网页用第二观察者拿同一帧，既不重启流、也不打断设备预览。
+ * 约束与第一观察者完全相同（cam_task 上下文、只做 memcpy、不得阻塞）。
+ * 未使用时保持 NULL，cam_task 不做额外开销。
+ */
+void camera_service_set_observer2(camera_frame_cb_t cb, void *user);
+
+/**
  * @brief 把上一次的**预览流**重新拉起来（拍照/录像收尾时的"归还"）
  *
  * 方案 §2.5.4 的事务模型是"接管 → 干活 → 归还"，其中"归还"= 恢复之前的 RGB565 预览，

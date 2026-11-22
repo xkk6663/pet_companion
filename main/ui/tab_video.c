@@ -46,6 +46,7 @@
 
 #include "tab_video.h"
 #include "ui_theme.h"
+#include "platform/port_display.h"          /* ui_camera_yield()：跨线程操作 LVGL 必须持 disp_lock */
 #include "middleware/camera/camera_service.h"
 #include "middleware/camera/capture_service.h"
 #include "middleware/camera/viewfinder.h"
@@ -476,6 +477,49 @@ static void vf_release_all(void)
     }
     viewfinder_disable();               /* 先停任务（幂等）——release 内部也会再调一次 */
     viewfinder_release();               /* 释放 s_dec_out / s_stage / s_disp[] */
+}
+
+/* ---------------------------------------------------------------------------
+ *  任意线程：让出相机（网页端"强制让出" / 开流前自动腾相机）
+ *
+ *  ★ 为什么不能由 httpd 直接 camera_service_stop()：
+ *    - tab_camera 的 50 ms 刷新会读 s_last_frame（指向 cam_task mmap 的帧）。
+ *      httpd 停流会 unmap，刷新恰好夹在中间 ⇒ 悬垂指针（UAF）。
+ *    - viewfinder_release() 的调用方义务是"画布先松开 s_disp[]"。
+ *      vf_release_all() 先 lv_canvas_set_buffer 换回自持缓冲，再 free。
+ *    ⇒ 两件事都必须在 disp_lock 临界区内、与 LVGL 定时器串行执行。
+ *
+ *  ★ 代价：持锁期间 LVGL 停摆；camera_service_stop() 最长等
+ *    CAM_STOP_WAIT_MS(500 ms)，正常 STREAMOFF 后任务几十 ms 退出 ⇒ 一次掉帧。
+ *  ★ 只动 owner=PREVIEW（CAM 页预览 / VIDEO 取景）；MEDIA（拍照/录像/
+ *    云端识图）一律不碰，由调用方按事务语义处理。
+ * ------------------------------------------------------------------------- */
+bool ui_camera_yield(void)
+{
+    if (!disp_lock_timeout(400)) {
+        ESP_LOGW(TAG, "yield: disp_lock timeout (UI busy)");
+        return false;
+    }
+
+    /* ① VIDEO 取景器：画布换回自持缓冲 → 停收帧 → 归还 ~2.93 MB PSRAM。
+     *    本页不在 VIDEO 时 s_canvas 仍存在（自持缓冲），操作同样安全。 */
+    s_preview_on = false;
+    vf_release_all();
+
+    /* ② 任何归 PREVIEW 的流：VIDEO 取景（720p JPEG，cb=NULL）或
+     *    CAM 页预览（240x240 RGB565，有帧回调）。MEDIA 不碰。 */
+    if (camera_service_owner() == CAM_OWNER_PREVIEW && camera_service_is_running()) {
+        esp_err_t err = camera_service_stop();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "yield: stop preview failed: %s", esp_err_to_name(err));
+            disp_unlock();
+            return false;
+        }
+        ESP_LOGI(TAG, "yield: device preview stopped (owner=PREVIEW)");
+    }
+
+    disp_unlock();
+    return true;
 }
 
 /* 开取景器 = 起流 → 申请缓冲 → 挂观察者。返回 false 表示取景器自身起不来。

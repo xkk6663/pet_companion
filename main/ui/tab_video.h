@@ -31,6 +31,19 @@ void tab_video_destroy(void);
  */
 void tab_video_set_active(bool active);
 
+/**
+ * @brief 让出相机：关本页取景器并停掉任何 owner=PREVIEW 的流（CAM 页预览也含）
+ *
+ * 供网页端"强制让出 / 开流前腾相机"调用，**任意线程可调**：
+ *   - 内部持 disp_lock（LVGL 非线程安全；tab_camera 的刷新定时器读帧指针，
+ *     必须与停流串行，否则 UAF）；最长阻塞约 400 + 500 ms；
+ *   - 先让画布换回自持缓冲再 viewfinder_release()，最后 camera_service_stop()；
+ *   - 只停 PREVIEW；MEDIA（拍照/录像/云端识图）不动，返回 true 也不代表相机已空闲。
+ *
+ * @return false = 没拿到 disp_lock 或停流失败（调用方应稍后重试）
+ */
+bool ui_camera_yield(void);
+
 #ifdef __cplusplus
 }
 #endif

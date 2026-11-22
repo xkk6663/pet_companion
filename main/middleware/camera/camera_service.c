@@ -127,6 +127,10 @@ static void *s_user = NULL;
  * （viewfinder 的观察者只做 memcpy + give 信号量，不碰任何共享结构）。 */
 static volatile camera_frame_cb_t s_observer      = NULL;
 static volatile void             *s_observer_user = NULL;
+/* ★ 2026-11-22：第二观察者。网页 MJPEG 在设备端 720p 取景流上"搭车"用 ——
+ *   第一观察者归 viewfinder，不动它；本槽只增一次 memcpy，未用时为 NULL。 */
+static volatile camera_frame_cb_t s_observer2      = NULL;
+static volatile void             *s_observer2_user = NULL;
 
 /* ---- ★ S2-0 运行时流状态 ----
  * 回调、get_stream()、以及 owner 查询都读这里。
@@ -232,6 +236,13 @@ static void cam_task(void *arg)
             if (obs) {
                 obs((const uint8_t *)s_buf[buf.index], (uint32_t)buf.bytesused,
                     s_cur_w, s_cur_h, ouser);
+            }
+            /* ★ 第二观察者：与第一观察者同级、互不顶替（网页 MJPEG 搭车取景流）。 */
+            camera_frame_cb_t obs2   = s_observer2;
+            void             *ouser2 = (void *)s_observer2_user;
+            if (obs2) {
+                obs2((const uint8_t *)s_buf[buf.index], (uint32_t)buf.bytesused,
+                     s_cur_w, s_cur_h, ouser2);
             }
         }
         if (ioctl(s_fd, VIDIOC_QBUF, &buf) != 0) {
@@ -1003,6 +1014,12 @@ void camera_service_set_observer(camera_frame_cb_t cb, void *user)
 {
     s_observer      = cb;
     s_observer_user = user;
+}
+
+void camera_service_set_observer2(camera_frame_cb_t cb, void *user)
+{
+    s_observer2      = cb;
+    s_observer2_user = user;
 }
 
 esp_err_t camera_service_restore_preview(void)
